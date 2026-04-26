@@ -1,6 +1,7 @@
 import { db } from "@/utils/supabase/server";
 import { NextResponse } from "next/server";
 import { Memento } from "../../types";
+import { checkAndSendNoticePrint } from "../notice-check";
 
 
 const DOKU_WEBHOOK_SECRET = process.env.DOKU_WEBHOOK_SECRET;
@@ -23,6 +24,7 @@ export async function POST(req: Request) {
         console.log("savePayment", revenue, additional, uuid, boothid);
         const data = await savePayment(revenue, additional, uuid, boothid);
         console.log("Saved payment", data);
+        await checkAndSendNoticePrint(boothid);
         return NextResponse.json({success: true, data: data});
     } catch(e) {
         console.error("Error in Doku Webhook:", e);

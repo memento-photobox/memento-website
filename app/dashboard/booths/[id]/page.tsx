@@ -6,6 +6,7 @@ import { requireDashboardSession } from "../../auth";
 import { currency } from "../../mock-data";
 import { db } from "@/utils/supabase/server";
 import BoothPriceEditor from "@/app/dashboard/_components/booth-price-editor";
+import BoothNoticePrintEditor from "@/app/dashboard/_components/booth-notice-print-editor";
 import DateRangeFilter from "@/app/dashboard/_components/date-range-filter";
 import DownloadXlsButton from "@/app/dashboard/_components/download-xls-button";
 import { resolveDateRange, toIsoRange } from "@/app/dashboard/date-range";
@@ -14,7 +15,7 @@ const PAGE_SIZE = 15;
 
 type BoothDetailProps = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ page?: string; from?: string; to?: string; mode?: string }>;
+  searchParams: Promise<{ page?: string; from?: string; to?: string; mode?: string; success?: string; error?: string }>;
 };
 
 type VoucherForBooth = {
@@ -57,7 +58,7 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
   // Fetch booth info
   const { data: booth, error: boothErr } = await supabase
     .from("booth")
-    .select("id, name, price")
+    .select("id, name, price, notice_print")
     .eq("id", boothId)
     .single();
 
@@ -108,6 +109,21 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
 
   return (
     <DashboardShell session={session} active="booths">
+      {sp.success === "notice" ? (
+        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+          Notice print berhasil diperbarui.
+        </div>
+      ) : sp.success === "price" ? (
+        <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+          Harga booth berhasil diperbarui.
+        </div>
+      ) : null}
+      {sp.error === "invalid_notice" ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          Nilai notice print tidak valid. Masukkan angka bulat positif.
+        </div>
+      ) : null}
+
       <header className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 md:p-5">
         <p className="text-xs uppercase tracking-[0.15em] text-indigo-300">Booth Detail</p>
         <h1 className="mt-1 text-2xl font-bold">
@@ -121,21 +137,8 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
       <section className="grid gap-4 lg:grid-cols-2">
         {/* ── Status Booth (mock for now) ── */}
         <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-          <h2 className="text-lg font-semibold">Status Booth</h2>
-          <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-emerald-300">
-              Booth: Aktif
-            </span>
-            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-emerald-300">
-              Kamera: Terdeteksi
-            </span>
-            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-emerald-300">
-              Printer: Ready
-            </span>
-          </div>
-
+          <h2 className="text-lg font-semibold">Voucher Aktif Booth Ini</h2>
           <div className="mt-4">
-            <p className="text-xs text-slate-400">Voucher Aktif Booth Ini</p>
             {activeVouchers.length === 0 ? (
               <p className="mt-1 text-sm text-slate-500">Tidak ada voucher aktif.</p>
             ) : (
@@ -167,6 +170,20 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
             <BoothPriceEditor boothId={booth.id} currentPrice={booth.price ?? 0} />
           </div>
         </article>
+      </section>
+
+      {/* ── Notice Print ──────────────────────── */}
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+        <h2 className="text-lg font-semibold">Notice Print</h2>
+        <p className="mt-1 text-xs text-slate-400">
+          Email notifikasi ke memento.photobox saat total print bulan ini mencapai nilai ini.
+        </p>
+        <div className="mt-3">
+          <BoothNoticePrintEditor
+            boothId={booth.id}
+            currentNoticePrint={(booth as { notice_print?: number | null }).notice_print ?? null}
+          />
+        </div>
       </section>
 
       {/* ── Filter Periode ──────────────────────── */}

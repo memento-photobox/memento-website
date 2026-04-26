@@ -147,6 +147,37 @@ export async function updateBoothPriceAction(formData: FormData) {
   redirect(`/dashboard/booths/${boothId}?success=price`);
 }
 
+// ── Booth notice print ────────────────────────────────────────
+export async function updateBoothNoticePrintAction(formData: FormData) {
+  const boothId = Number(formData.get("booth_id"));
+  const raw = formData.get("notice_print")?.toString().trim();
+
+  if (Number.isNaN(boothId)) {
+    redirect(`/dashboard/booths/${boothId}?error=invalid_notice`);
+  }
+
+  // Allow clearing the value (empty string → null)
+  const noticePrint = raw === "" || raw === undefined ? null : Math.trunc(Number(raw));
+
+  if (raw !== "" && raw !== undefined && (Number.isNaN(noticePrint) || (noticePrint as number) < 1)) {
+    redirect(`/dashboard/booths/${boothId}?error=invalid_notice`);
+  }
+
+  const supabase = await db();
+
+  const { error } = await supabase
+    .from("booth")
+    .update({ notice_print: noticePrint })
+    .eq("id", boothId);
+
+  if (error) {
+    console.error("Failed to update booth notice_print:", error);
+    redirect(`/dashboard/booths/${boothId}?error=db`);
+  }
+
+  redirect(`/dashboard/booths/${boothId}?success=notice`);
+}
+
 // ── Voucher CRUD ──────────────────────────────────────────────
 export async function createVoucherAction(formData: FormData) {
   const name = formData.get("name")?.toString().trim();
