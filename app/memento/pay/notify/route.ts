@@ -4,6 +4,7 @@ import { Memento } from "../../types";
 import { env } from "@/app/env";
 import { sha512 } from "js-sha512";
 import { extractOrderId } from "../../utils";
+import { checkAndSendNoticePrint } from "../notice-check";
 
 type MidtransNotificationRequest = {
     // order_id+status_code+gross_amount+ServerKey
@@ -67,6 +68,7 @@ async function savePayment(revenue: string, additional: string, uuid: string, bo
 export async function POST(request: Request) {
     try {
         const data = await processPayment(request);
+        await checkAndSendNoticePrint(data.boothid);
         return NextResponse.json({ success: true, data: data });    
     } catch (e) {
         return NextResponse.json({ success: false, error: e }, { status: 400 });
