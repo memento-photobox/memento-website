@@ -2,8 +2,8 @@ import { db } from "@/utils/supabase/server";
 import { createHmac, createHash } from "crypto";
 import { NextResponse } from "next/server";
 import { env } from "@/app/env";
-import { Memento } from "../../types";
-import { checkAndSendNoticePrint } from "../notice-check";
+import { Memento } from "../../../types";
+import { checkAndSendNoticePrint } from "../../notice-check";
 
 const SANDBOX_BASE = "https://tst.yokke.co.id:8280/qrissnapmpm/1.0.11";
 const PROD_BASE    = "https://api.yokke.co.id:7778";
@@ -188,7 +188,7 @@ function successResponse() {
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 /**
- * POST /memento/pay/yokkenotify
+ * POST /memento/pay/qr/qr-mpm-notify
  *
  * Yokke calls this endpoint (QR Payment Credit Notify, service code 52) after
  * every payment event.  We verify by calling the inquiry API and, on success,
