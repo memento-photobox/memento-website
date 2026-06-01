@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { env } from "@/app/env";
 import { Memento } from "../../../types";
 import { checkAndSendNoticePrint } from "../../notice-check";
+import { toGmt7OffsetISOString, toGmt7YmdCompact } from "@/app/lib/timezone";
 
 const SANDBOX_BASE = "https://tst.yokke.co.id:8280/qrissnapmpm/1.0.11";
 const PROD_BASE    = "https://api.yokke.co.id:7778";
@@ -19,7 +20,7 @@ function getInquiryUrl() {
 // ─── Timestamp ────────────────────────────────────────────────────────────────
 
 function getTimestamp(): string {
-    return new Date().toISOString().replace(/\.\d{3}Z$/, "+07:00");
+    return toGmt7OffsetISOString();
 }
 
 // ─── API call signature (HMAC-SHA512) ─────────────────────────────────────────
@@ -222,7 +223,7 @@ export async function POST(request: Request) {
         const { boothId, uuid } = pending;
 
         // 2. Call inquiry to double-verify with Yokke
-        const txDate = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+        const txDate = toGmt7YmdCompact(); // YYYYMMDD
         const accessToken = await getAccessToken();
         const inquiry = await inquireTransaction(
             accessToken,

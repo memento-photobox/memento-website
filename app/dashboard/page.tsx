@@ -6,6 +6,7 @@ import { currency } from "./mock-data";
 import { db } from "@/utils/supabase/server";
 import DownloadXlsButton from "@/app/dashboard/_components/download-xls-button";
 import DateRangeFilter from "@/app/dashboard/_components/date-range-filter";
+import { formatDateGmt7, formatDateTimeGmt7 } from "@/app/lib/timezone";
 import { resolveDateRange, toIsoRange } from "./date-range";
 
 const PAGE_SIZE = 15;
@@ -141,12 +142,12 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
             {hasFilter ? (
               <p className="mt-1 text-xs text-indigo-300">
                 {isDefaultMonth
-                  ? `Bulan ini · ${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} — ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`
+                  ? `Bulan ini · ${formatDateGmt7(fromDate, { dateStyle: "medium" })} — ${formatDateGmt7(toDate, { dateStyle: "medium" })}`
                   : fromDate && toDate
-                  ? `${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} — ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`
+                  ? `${formatDateGmt7(fromDate, { dateStyle: "medium" })} — ${formatDateGmt7(toDate, { dateStyle: "medium" })}`
                   : fromDate
-                    ? `Dari ${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`
-                    : `Sampai ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`}
+                    ? `Dari ${formatDateGmt7(fromDate, { dateStyle: "medium" })}`
+                    : `Sampai ${formatDateGmt7(toDate, { dateStyle: "medium" })}`}
               </p>
             ) : (
               <p className="mt-1 text-xs text-slate-500">Semua waktu</p>
@@ -214,7 +215,7 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
               {rows.map((row, i) => (
                 <tr key={`${row.created_at}-${i}`} className="border-b border-slate-800/50">
                   <td className="py-2 pr-4">
-                    {new Date(row.created_at).toLocaleString("id-ID", {
+                    {formatDateTimeGmt7(row.created_at, {
                       dateStyle: "medium",
                       timeStyle: "short",
                     })}
@@ -292,7 +293,7 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
                 <tr key={row.id} className="border-b border-slate-800/50">
                   <td className="py-2 pr-4 text-slate-400">{voucherOffset + i + 1}</td>
                   <td className="py-2 pr-4">
-                    {new Date(row.created_at).toLocaleString("id-ID", {
+                    {formatDateTimeGmt7(row.created_at, {
                       dateStyle: "medium",
                       timeStyle: "short",
                     })}

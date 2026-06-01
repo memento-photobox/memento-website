@@ -1,5 +1,7 @@
 "use client";
 
+import { toGmt7OffsetISOString } from "@/app/lib/timezone";
+
 type DownloadXlsButtonProps = {
   boothId: string | null;
   fromDate?: string;
@@ -8,13 +10,10 @@ type DownloadXlsButtonProps = {
 
 export default function DownloadXlsButton({ boothId, fromDate, toDate }: DownloadXlsButtonProps) {
   function buildTimestamp() {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mi = String(d.getMinutes()).padStart(2, "0");
-    const ss = String(d.getSeconds()).padStart(2, "0");
+    const iso = toGmt7OffsetISOString(new Date(), { includeMilliseconds: false });
+    const [date, time] = iso.split("T");
+    const [hh, mi, ss] = time.replace("+07:00", "").split(":");
+    const [yyyy, mm, dd] = date.split("-");
     return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;
   }
 

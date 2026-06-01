@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { clearDashboardSession, setDashboardSession } from "./auth";
 import { db } from "@/utils/supabase/server";
+import { dateTimeInputToGmt7ISOString } from "@/app/lib/timezone";
 
 export async function loginDashboardAction(formData: FormData) {
   const email = formData.get("email")?.toString().trim().toLowerCase();
@@ -206,7 +207,7 @@ export async function createVoucherAction(formData: FormData) {
     discount_value: discountValue,
     max_usage: maxUsage,
     current_usage: 0,
-    expires_at: new Date(expiresAt).toISOString(),
+    expires_at: dateTimeInputToGmt7ISOString(expiresAt),
     allowed_booth_ids: allowedBoothIds,
   });
 

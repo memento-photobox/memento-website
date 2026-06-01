@@ -5,6 +5,7 @@ import { requireDashboardSession } from "../auth";
 import { currency } from "../mock-data";
 import { db } from "@/utils/supabase/server";
 import DateRangeFilter from "@/app/dashboard/_components/date-range-filter";
+import { formatDateGmt7 } from "@/app/lib/timezone";
 import { resolveDateRange, toIsoRange } from "../date-range";
 
 type DashboardBoothsPageProps = {
@@ -69,8 +70,8 @@ export default async function DashboardBoothsPage({ searchParams }: DashboardBoo
             {hasFilter ? (
               <p className="mt-1 text-xs text-indigo-300">
                 {isDefaultMonth
-                  ? `Bulan ini · ${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} — ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`
-                  : `${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} — ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`}
+                  ? `Bulan ini · ${formatDateGmt7(fromDate, { dateStyle: "medium" })} — ${formatDateGmt7(toDate, { dateStyle: "medium" })}`
+                  : `${formatDateGmt7(fromDate, { dateStyle: "medium" })} — ${formatDateGmt7(toDate, { dateStyle: "medium" })}`}
               </p>
             ) : (
               <p className="mt-1 text-xs text-slate-500">Semua waktu</p>

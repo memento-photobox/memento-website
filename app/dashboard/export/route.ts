@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDashboardSession } from "../auth";
 import { db } from "@/utils/supabase/server";
+import { formatDateTimeGmt7, toGmt7DayEndISOString, toGmt7DayStartISOString } from "@/app/lib/timezone";
 
 // Supabase/PostgREST commonly caps response rows per request at 1000 by default.
 // Keep chunk size at 1000 so pagination can reliably fetch all rows.
@@ -43,10 +44,10 @@ export async function GET(request: NextRequest) {
     }
 
     if (fromDate) {
-      query = query.gte("created_at", `${fromDate}T00:00:00.000Z`);
+      query = query.gte("created_at", toGmt7DayStartISOString(fromDate));
     }
     if (toDate) {
-      query = query.lte("created_at", `${toDate}T23:59:59.999Z`);
+      query = query.lte("created_at", toGmt7DayEndISOString(toDate));
     }
 
     const { data, error } = await query;
@@ -67,7 +68,7 @@ export async function GET(request: NextRequest) {
   const body = rows
     .map(
       (row, i: number) =>
-        `<tr><td>${i + 1}</td><td>${new Date(row.created_at).toLocaleString("id-ID")}</td><td>${row.revenue}</td><td>${row.boothid}</td></tr>`
+        `<tr><td>${i + 1}</td><td>${formatDateTimeGmt7(row.created_at)}</td><td>${row.revenue}</td><td>${row.boothid}</td></tr>`
     )
     .join("");
 

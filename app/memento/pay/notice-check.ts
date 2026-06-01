@@ -8,6 +8,7 @@
 
 import { db } from "@/utils/supabase/server";
 import { sendNoticePrintEmail } from "@/app/dashboard/mail";
+import { formatDateGmt7, toGmt7DayEndISOString, toGmt7DayStartISOString, toGmt7OffsetISOString } from "@/app/lib/timezone";
 
 export async function checkAndSendNoticePrint(boothid: string): Promise<void> {
   try {
@@ -26,8 +27,19 @@ export async function checkAndSendNoticePrint(boothid: string): Promise<void> {
 
     // 2. Count prints for the current calendar month
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString();
+    const [yearStr, monthStr] = toGmt7OffsetISOString(now, { includeMilliseconds: false })
+      .slice(0, 10)
+      .split("-");
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+    const monthStart = toGmt7DayStartISOString(
+      `${yearStr}-${monthStr}-01`
+    );
+    const monthEnd = toGmt7DayEndISOString(
+      `${yearStr}-${monthStr}-${String(lastDay).padStart(2, "0")}`
+    );
 
     const { count, error: countErr } = await supabase
       .from("memento")
@@ -49,7 +61,7 @@ export async function checkAndSendNoticePrint(boothid: string): Promise<void> {
     // Only send once — when count is exactly at the threshold
     if (currentMonthPrints > noticePrint) return;
 
-    const monthLabel = now.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+    const monthLabel = formatDateGmt7(now, { month: "long", year: "numeric" });
 
     await sendNoticePrintEmail(
       booth.id,

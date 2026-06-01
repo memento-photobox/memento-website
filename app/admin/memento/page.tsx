@@ -1,14 +1,21 @@
 import { Memento } from "@/app/memento/types";
 import { db } from "@/utils/supabase/server";
-import dateFormat, { masks } from "dateformat";
+import { formatDateTimeGmt7 } from "@/app/lib/timezone";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
 
 function formatDate(date: string): string {
-    const d = new Date(date);
-    return dateFormat(d, "dd/MM/yyyy HH:mm:ss");
+    return formatDateTimeGmt7(date, {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+    });
 }
 
 async function togglePaid(formData: FormData) {

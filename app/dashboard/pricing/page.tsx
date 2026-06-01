@@ -5,6 +5,7 @@ import { db } from "@/utils/supabase/server";
 import PriceEditor from "@/app/dashboard/_components/price-editor";
 import VoucherModal from "@/app/dashboard/_components/voucher-modal";
 import DeleteVoucherButton from "@/app/dashboard/_components/delete-voucher-button";
+import { formatDateTimeGmt7 } from "@/app/lib/timezone";
 
 type Voucher = {
   id: string;
@@ -138,7 +139,7 @@ export default async function DashboardPricingPage() {
                       <span className="text-slate-500"> / {v.max_usage}</span>
                     </td>
                     <td className="py-2 pr-4 text-xs">
-                      {new Date(v.expires_at).toLocaleString("id-ID", {
+                      {formatDateTimeGmt7(v.expires_at, {
                         dateStyle: "medium",
                         timeStyle: "short",
                       })}
