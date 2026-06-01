@@ -1,3 +1,5 @@
+import { toGmt7DayEndISOString, toGmt7DayStartISOString } from "@/app/lib/timezone";
+
 function formatInputDate(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -46,7 +48,7 @@ export function resolveDateRange(from?: string, to?: string, mode?: string) {
 
 export function toIsoRange(from?: string, to?: string) {
   return {
-    fromIso: from ? `${from}T00:00:00.000Z` : null,
-    toIso: to ? `${to}T23:59:59.999Z` : null,
+    fromIso: from ? toGmt7DayStartISOString(from) : null,
+    toIso: to ? toGmt7DayEndISOString(to) : null,
   };
 }

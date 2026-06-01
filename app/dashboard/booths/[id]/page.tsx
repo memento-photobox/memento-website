@@ -10,6 +10,7 @@ import BoothNoticePrintEditor from "@/app/dashboard/_components/booth-notice-pri
 import DateRangeFilter from "@/app/dashboard/_components/date-range-filter";
 import DownloadXlsButton from "@/app/dashboard/_components/download-xls-button";
 import { resolveDateRange, toIsoRange } from "@/app/dashboard/date-range";
+import { formatDateGmt7, formatDateTimeGmt7, toGmt7OffsetISOString } from "@/app/lib/timezone";
 
 const PAGE_SIZE = 15;
 
@@ -89,7 +90,7 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
     summaryQuery,
   ]);
 
-  const nowIso = new Date().toISOString();
+  const nowIso = toGmt7OffsetISOString();
   const { data: voucherRows } = await supabase
     .from("voucher")
     .select("id, name, code, discount_type, discount_value, current_usage, max_usage, expires_at")
@@ -194,12 +195,12 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
             {hasFilter ? (
               <p className="mt-1 text-xs text-indigo-300">
                 {isDefaultMonth
-                  ? `${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} — ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} · Bulan ini`
+                  ? `${formatDateGmt7(fromDate, { dateStyle: "medium" })} — ${formatDateGmt7(toDate, { dateStyle: "medium" })} · Bulan ini`
                   : fromDate && toDate
-                  ? `${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })} — ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`
+                  ? `${formatDateGmt7(fromDate, { dateStyle: "medium" })} — ${formatDateGmt7(toDate, { dateStyle: "medium" })}`
                   : fromDate
-                    ? `Dari ${new Date(fromDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`
-                    : `Sampai ${new Date(toDate).toLocaleDateString("id-ID", { dateStyle: "medium" })}`}
+                    ? `Dari ${formatDateGmt7(fromDate, { dateStyle: "medium" })}`
+                    : `Sampai ${formatDateGmt7(toDate, { dateStyle: "medium" })}`}
               </p>
             ) : (
               <p className="mt-1 text-xs text-slate-500">Semua waktu</p>
@@ -264,7 +265,7 @@ export default async function BoothDetailPage({ params, searchParams }: BoothDet
               {rows.map((row, i) => (
                 <tr key={`${row.created_at}-${i}`} className="border-b border-slate-800/50">
                   <td className="py-2 pr-4">
-                    {new Date(row.created_at).toLocaleString("id-ID", {
+                    {formatDateTimeGmt7(row.created_at, {
                       dateStyle: "medium",
                       timeStyle: "short",
                     })}

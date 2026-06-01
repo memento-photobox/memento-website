@@ -1,6 +1,7 @@
 import { db } from "@/utils/supabase/server";
 import { Memento } from "./memento/types";
 import { env } from "./env";
+import { toGmt7OffsetISOString } from "@/app/lib/timezone";
 
 export async function getAllMemento(): Promise<Memento[]> {
     const supabase = await db();
@@ -11,7 +12,7 @@ export async function getAllMemento(): Promise<Memento[]> {
 
 export function yesterday() {
     const dt = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    return dt.toISOString();
+    return toGmt7OffsetISOString(dt);
 }
 
 export async function getAllMementoYesterday() {

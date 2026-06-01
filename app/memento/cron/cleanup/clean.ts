@@ -2,11 +2,16 @@ import { db } from "@/utils/supabase/server";
 import { Memento } from "../../types";
 import { PostgrestSingleResponse } from "@supabase/supabase-js";
 import { FileObject } from "@supabase/storage-js/src/lib/types";
+import { toGmt7OffsetISOString } from "@/app/lib/timezone";
 
 function getOneWeekAgo() {
     const d = new Date();
     d.setDate(d.getDate() - 7);
     return d;
+}
+
+function getOneWeekAgoGmt7Iso() {
+    return toGmt7OffsetISOString(getOneWeekAgo());
 }
 
 
@@ -20,7 +25,7 @@ async function getOneWeekAgoMemento(): Promise<Memento[]> {
         result = await supabase
             .from("memento")
             .select("*")
-            .lte("updated_at", getOneWeekAgo().toISOString())
+            .lte("updated_at", getOneWeekAgoGmt7Iso())
             .eq("is_deleted", false)
         if(result.error) {
             console.error("Error fetching mementos:", result.error);
@@ -183,7 +188,7 @@ async function markOldMementosAsDeleted(): Promise<Memento[]> {
     const { data, error } = await supabase
         .from("memento")
         .update({ is_deleted: true })
-        .lte("updated_at", getOneWeekAgo())
+        .lte("updated_at", getOneWeekAgoGmt7Iso())
         .eq("is_deleted", false)
         .select("*"); // Return the updated rows
 

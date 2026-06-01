@@ -24,4 +24,14 @@ export const env = {
     duitkuPrivateKey: process.env.DUITKU_PRIVATE_KEY,
     duitkuBearer: process.env.DUITKU_BEARER,
 
+    // Yokke QRIS MPM
+    yokkeIsProduction: process.env.YOKKE_IS_PRODUCTION === "1",
+    yokkeClientKey: process.env.YOKKE_CLIENT_KEY,       // X-CLIENT-KEY (username)
+    yokkePrivateKey: process.env.YOKKE_PRIVATE_KEY,     // RSA private key (PEM) for access token signature
+    yokkeClientSecret: process.env.YOKKE_CLIENT_SECRET, // HMAC-SHA512 secret for API call signatures
+    yokkePartnerId: process.env.YOKKE_PARTNER_ID,       // X-PARTNER-ID
+    yokkeChannelId: process.env.YOKKE_CHANNEL_ID,       // CHANNEL-ID (e.g. "02")
+    yokkeMerchantId: process.env.YOKKE_MERCHANT_ID,     // merchantId in request body
+    yokkeTerminalId: process.env.YOKKE_TERMINAL_ID,     // terminalId in request body
+
 }
