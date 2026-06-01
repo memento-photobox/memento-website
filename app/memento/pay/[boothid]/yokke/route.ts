@@ -2,7 +2,6 @@ import { db } from "@/utils/supabase/server";
 import { createSign, createHmac, createHash, randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { env } from "@/app/env";
-import { toGmt7OffsetISOString } from "@/app/lib/timezone";
 
 // ─── URL helpers ──────────────────────────────────────────────────────────────
 
@@ -22,7 +21,7 @@ function getGenerateUrl() { return `${getBase()}${GENERATE_PATH}`; }
 // ─── Timestamp ────────────────────────────────────────────────────────────────
 
 function getTimestamp(): string {
-    return toGmt7OffsetISOString();
+    return new Date().toISOString().replace(/\.\d{3}Z$/, "+07:00");
 }
 
 // ─── Access token ─────────────────────────────────────────────────────────────
