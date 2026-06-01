@@ -1,7 +1,6 @@
 import { db } from "@/utils/supabase/server";
 import { createHash, createHmac, randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import { toGmt7OffsetISOString } from "@/app/lib/timezone";
 
 
 const checkoutV1Payment = "/checkout/v1/payment";
@@ -67,7 +66,7 @@ function getBody(price: number, orderId: string): DokuCheckoutRequest {
 }
 
 function getTimestamp() {
-    return toGmt7OffsetISOString(new Date(), { includeMilliseconds: false });
+    return new Date().toISOString().split('.')[0] + 'Z';
 }
 
 function getSignature(clientId: string, reqId: string, reqTimestamp: string, jsonBody: DokuCheckoutRequest): string {
