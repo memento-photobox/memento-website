@@ -25,11 +25,6 @@ function getTimestamp(): string {
 }
 
 // ─── Access token ─────────────────────────────────────────────────────────────
-
-/**
- * Signature for access-token endpoint:
- *   SHA256withRSA(privateKey, X-CLIENT-KEY + "|" + X-TIMESTAMP)
- */
 function buildTokenSignature(clientKey: string, timestamp: string): string {
     const privateKey = env.yokkePrivateKey!;
     const stringToSign = `${clientKey}|${timestamp}`;
@@ -91,16 +86,40 @@ function buildApiSignature(
     return createHmac("sha512", env.yokkeClientSecret!).update(stringToSign).digest("base64");
 }
 
-// ─── Partner reference number ─────────────────────────────────────────────────
+// ─── Unique reference generators ────────────────────────────────────────────
 
 /**
- * Generates a 15-digit numeric partnerReferenceNo from the current timestamp
- * plus a 2-digit random suffix.
+ * Returns today's date as YYYYMMDD (8 digits, WIB timezone).
+ */
+function todayPrefix(): string {
+    return new Date()
+        .toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit" })
+        .split("/")
+        .reverse()
+        .join("");
+}
+
+/**
+ * Generates a unique partnerReferenceNo (max 20 chars, numeric):
+ *   YYYYMMDD (8) + millis-last-5 (5) + random-4 (4) + random-3 (3) = 20 chars
+ * Unique within a day because of millis + random suffix.
  */
 function generatePartnerRef(): string {
-    const ts = Date.now().toString(); // 13 digits
-    const rand = Math.floor(Math.random() * 100).toString().padStart(2, "0");
-    return (ts + rand).slice(-15);
+    const date   = todayPrefix();                                          
+    const millis = (Date.now() % 100000).toString().padStart(5, "0");          
+    const rand   = Math.floor(Math.random() * 10000000).toString().padStart(7, "0"); 
+    return date + millis + rand;
+}
+
+/**
+ * Generates a unique X-EXTERNAL-ID (max 15 chars, numeric):
+ *   YYYYMMDD (8) + millis-last-4 (4) + random-3 (3) = 15 chars
+ */
+function generateExternalId(): string {
+    const date   = todayPrefix();                                              
+    const millis = (Date.now() % 10000).toString().padStart(4, "0");          
+    const rand   = Math.floor(Math.random() * 1000).toString().padStart(3, "0"); 
+    return date + millis + rand; 
 }
 
 // ─── Price lookup ─────────────────────────────────────────────────────────────
@@ -146,8 +165,11 @@ async function storePendingPayment(
 async function generateQR(boothid: string, uuid: string): Promise<YokkeQRResponse> {
     const accessToken       = await getAccessToken();
     const timestamp         = getTimestamp();
-    const partnerRef        = generatePartnerRef();
-    const externalId        = Date.now().toString().padStart(15, "0");
+    const partnerRef        = env.yokkeTestCase ?? generatePartnerRef();
+    const externalId        = generateExternalId();
+    if (env.yokkeTestCase) {
+        console.log("[yokke] using test-case partnerRef:", partnerRef);
+    }
     const price             = await getPriceByBoothId(boothid);
     const priceStr          = `${price}.00`;
 
@@ -156,7 +178,7 @@ async function generateQR(boothid: string, uuid: string): Promise<YokkeQRRespons
         terminalId:           env.yokkeTerminalId!,
         partnerReferenceNo:   partnerRef,
         amount:               { value: priceStr, currency: "IDR" },
-        feeAmount:            { value: "0.00",   currency: "IDR" },
+        feeAmount:            { value: priceStr,   currency: "IDR" },
     };
 
     const signature = buildApiSignature("POST", GENERATE_PATH, accessToken, body, timestamp);
@@ -186,7 +208,6 @@ async function generateQR(boothid: string, uuid: string): Promise<YokkeQRRespons
     const data: YokkeQRResponse = await res.json();
     console.log("[yokke] QR generated, referenceNo:", data.referenceNo);
 
-    // Persist the mapping so the notify handler can recover boothid + uuid
     await storePendingPayment(partnerRef, data.referenceNo ?? null, boothid, uuid);
 
     return { ...data, partnerReferenceNo: partnerRef };

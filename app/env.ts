@@ -33,5 +33,6 @@ export const env = {
     yokkeChannelId: process.env.YOKKE_CHANNEL_ID,       // CHANNEL-ID (e.g. "02")
     yokkeMerchantId: process.env.YOKKE_MERCHANT_ID,     // merchantId in request body
     yokkeTerminalId: process.env.YOKKE_TERMINAL_ID,     // terminalId in request body
+    yokkeTestCase: process.env.YOKKE_TEST_CASE || null,
 
 }
