@@ -5,7 +5,7 @@ import { env } from "@/app/env";
 
 // ─── URL helpers ──────────────────────────────────────────────────────────────
 
-const SANDBOX_BASE = "https://tst.yokke.co.id:7778/qrissnapmpm/1.0.11";
+const SANDBOX_BASE = "https://tst.yokke.co.id:8280/qrissnapmpm/1.0.11";
 const PROD_BASE = "https://api.yokke.co.id:7778";
 
 function getBase() {
