@@ -5,17 +5,17 @@ import { env } from "@/app/env";
 
 // ─── URL helpers ──────────────────────────────────────────────────────────────
 
-const SANDBOX_BASE = "https://tst.yokke.co.id:8280/qrissnapmpm/1.0.11";
-const PROD_BASE    = "https://api.yokke.co.id:7778";
+const SANDBOX_BASE = "https://tst.yokke.co.id:7778/qrissnapmpm/1.0.11";
+const PROD_BASE = "https://api.yokke.co.id:7778";
 
 function getBase() {
     return env.yokkeIsProduction ? PROD_BASE : SANDBOX_BASE;
 }
 
-const TOKEN_PATH    = "/qr/v2.0/access-token/b2b";
+const TOKEN_PATH = "/qr/v2.0/access-token/b2b";
 const GENERATE_PATH = "/v2.0/qr/qr-mpm-generate";
 
-function getTokenUrl()    { return `${getBase()}${TOKEN_PATH}`; }
+function getTokenUrl() { return `${getBase()}${TOKEN_PATH}`; }
 function getGenerateUrl() { return `${getBase()}${GENERATE_PATH}`; }
 
 // ─── Timestamp ────────────────────────────────────────────────────────────────
@@ -41,11 +41,11 @@ async function getAccessToken(): Promise<string> {
     const res = await fetch(getTokenUrl(), {
         method: "POST",
         headers: {
-            "Content-Type":  "application/json",
-            "X-CLIENT-KEY":  clientKey,
-            "X-TIMESTAMP":   timestamp,
-            "X-SIGNATURE":   signature,
-            "X-PLATFORM":    "PORTAL",
+            "Content-Type": "application/json",
+            "X-CLIENT-KEY": clientKey,
+            "X-TIMESTAMP": timestamp,
+            "X-SIGNATURE": signature,
+            "X-PLATFORM": "PORTAL",
         },
         body: JSON.stringify({ grantType: "client_credentials" }),
     });
@@ -105,9 +105,9 @@ function todayPrefix(): string {
  * Unique within a day because of millis + random suffix.
  */
 function generatePartnerRef(): string {
-    const date   = todayPrefix();                                          
-    const millis = (Date.now() % 100000).toString().padStart(5, "0");          
-    const rand   = Math.floor(Math.random() * 10000000).toString().padStart(7, "0"); 
+    const date = todayPrefix();
+    const millis = (Date.now() % 100000).toString().padStart(5, "0");
+    const rand = Math.floor(Math.random() * 10000000).toString().padStart(7, "0");
     return date + millis + rand;
 }
 
@@ -116,10 +116,10 @@ function generatePartnerRef(): string {
  *   YYYYMMDD (8) + millis-last-4 (4) + random-3 (3) = 15 chars
  */
 function generateExternalId(): string {
-    const date   = todayPrefix();                                              
-    const millis = (Date.now() % 10000).toString().padStart(4, "0");          
-    const rand   = Math.floor(Math.random() * 1000).toString().padStart(3, "0"); 
-    return date + millis + rand; 
+    const date = todayPrefix();
+    const millis = (Date.now() % 10000).toString().padStart(4, "0");
+    const rand = Math.floor(Math.random() * 1000).toString().padStart(3, "0");
+    return date + millis + rand;
 }
 
 // ─── Price lookup ─────────────────────────────────────────────────────────────
@@ -151,9 +151,9 @@ async function storePendingPayment(
         .from("yokke_pending_payments")
         .insert({
             partner_reference_no: partnerReferenceNo,
-            yokke_reference_no:   yokkeReferenceNo,
-            booth_id:             boothid,
-            uuid:                 uuid,
+            yokke_reference_no: yokkeReferenceNo,
+            booth_id: boothid,
+            uuid: uuid,
         });
     if (error) {
         console.error("[yokke] Failed to store pending payment:", error);
@@ -163,22 +163,22 @@ async function storePendingPayment(
 // ─── QR generation ────────────────────────────────────────────────────────────
 
 async function generateQR(boothid: string, uuid: string): Promise<YokkeQRResponse> {
-    const accessToken       = await getAccessToken();
-    const timestamp         = getTimestamp();
-    const partnerRef        = env.yokkeTestCase ?? generatePartnerRef();
-    const externalId        = generateExternalId();
+    const accessToken = await getAccessToken();
+    const timestamp = getTimestamp();
+    const partnerRef = env.yokkeTestCase ?? generatePartnerRef();
+    const externalId = generateExternalId();
     if (env.yokkeTestCase) {
         console.log("[yokke] using test-case partnerRef:", partnerRef);
     }
-    const price             = await getPriceByBoothId(boothid);
-    const priceStr          = `${price}.00`;
+    const price = await getPriceByBoothId(boothid);
+    const priceStr = `${price}.00`;
 
     const body: YokkeQRRequest = {
-        merchantId:           env.yokkeMerchantId!,
-        terminalId:           env.yokkeTerminalId!,
-        partnerReferenceNo:   partnerRef,
-        amount:               { value: priceStr, currency: "IDR" },
-        feeAmount:            { value: priceStr,   currency: "IDR" },
+        merchantId: env.yokkeMerchantId!,
+        terminalId: env.yokkeTerminalId!,
+        partnerReferenceNo: partnerRef,
+        amount: { value: priceStr, currency: "IDR" },
+        feeAmount: { value: priceStr, currency: "IDR" },
     };
 
     const signature = buildApiSignature("POST", GENERATE_PATH, accessToken, body, timestamp);
@@ -188,13 +188,13 @@ async function generateQR(boothid: string, uuid: string): Promise<YokkeQRRespons
     const res = await fetch(getGenerateUrl(), {
         method: "POST",
         headers: {
-            "Content-Type":   "application/json",
-            "Authorization":  `Bearer ${accessToken}`,
-            "X-TIMESTAMP":    timestamp,
-            "X-SIGNATURE":    signature,
-            "X-EXTERNAL-ID":  externalId,
-            "X-PARTNER-ID":   env.yokkePartnerId!,
-            "CHANNEL-ID":     env.yokkeChannelId ?? "02",
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${accessToken}`,
+            "X-TIMESTAMP": timestamp,
+            "X-SIGNATURE": signature,
+            "X-EXTERNAL-ID": externalId,
+            "X-PARTNER-ID": env.yokkePartnerId!,
+            "CHANNEL-ID": env.yokkeChannelId ?? "02",
         },
         body: JSON.stringify(body),
     });
@@ -216,9 +216,9 @@ async function generateQR(boothid: string, uuid: string): Promise<YokkeQRRespons
 // ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
-    const split   = request.url.split("/");
+    const split = request.url.split("/");
     const boothid = split[split.length - 2];
-    const uuid    = randomUUID();
+    const uuid = randomUUID();
 
     try {
         const data = await generateQR(boothid, uuid);
@@ -234,19 +234,19 @@ export async function POST(request: Request) {
 type MoneyField = { value: string; currency: string };
 
 type YokkeQRRequest = {
-    merchantId:         string;
-    terminalId:         string;
+    merchantId: string;
+    terminalId: string;
     partnerReferenceNo: string;
-    amount:             MoneyField;
-    feeAmount:          MoneyField;
+    amount: MoneyField;
+    feeAmount: MoneyField;
 };
 
 type YokkeQRResponse = {
-    responseCode:       string;
-    responseMessage:    string;
-    referenceNo?:       string;
+    responseCode: string;
+    responseMessage: string;
+    referenceNo?: string;
     partnerReferenceNo: string;
-    qrContent?:         string;
-    terminalId?:        string;
-    additionalInfo?:    { merchantId: string };
+    qrContent?: string;
+    terminalId?: string;
+    additionalInfo?: { merchantId: string };
 };
