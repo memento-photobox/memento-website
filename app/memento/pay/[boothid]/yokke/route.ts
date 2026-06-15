@@ -200,9 +200,9 @@ function generateExternalId(): string {
     return date + millis + rand;
 }
 
-// ─── Price lookup ─────────────────────────────────────────────────────────────
+// ─── Price computation ─────────────────────────────────────────────────────────
 
-async function getPriceByBoothId(boothid: string): Promise<number> {
+async function getBoothBasePrice(boothid: string): Promise<number> {
     const supabase = await db();
     const { data, error } = await supabase
         .from("booth")
@@ -214,6 +214,75 @@ async function getPriceByBoothId(boothid: string): Promise<number> {
         return 10000;
     }
     return data.price;
+}
+
+/**
+ * Compute final price:
+ *   basePrice × jumlah_print − voucher discount
+ *
+ * If a voucher code is provided, it is validated (expiry, max usage)
+ * and the discount is applied. On success the voucher’s current_usage
+ * is incremented.
+ *
+ * Returns { finalPrice, voucherId } where voucherId is null when no
+ * voucher was used.
+ */
+async function computeFinalPrice(
+    boothid: string,
+    jumlahPrint: number,
+    voucherCode: string | null | undefined,
+): Promise<{ finalPrice: number; voucherId: string | null }> {
+    const basePrice = await getBoothBasePrice(boothid);
+    let subtotal = basePrice * jumlahPrint;
+    console.log(`[yokke] Price: base=${basePrice} × jumlah_print=${jumlahPrint} = ${subtotal}`);
+
+    if (!voucherCode) {
+        return { finalPrice: subtotal, voucherId: null };
+    }
+
+    // Validate voucher
+    const supabase = await db();
+    const { data: voucher, error } = await supabase
+        .from("voucher")
+        .select("id, code, discount_type, discount_value, max_usage, current_usage, expires_at")
+        .eq("code", voucherCode.toUpperCase())
+        .single();
+
+    if (error || !voucher) {
+        console.warn(`[yokke] Voucher "${voucherCode}" not found, ignoring`);
+        return { finalPrice: subtotal, voucherId: null };
+    }
+
+    // Check expiry
+    if (new Date(voucher.expires_at) < new Date()) {
+        console.warn(`[yokke] Voucher "${voucherCode}" expired`);
+        return { finalPrice: subtotal, voucherId: null };
+    }
+
+    // Check max usage
+    if (voucher.current_usage >= voucher.max_usage) {
+        console.warn(`[yokke] Voucher "${voucherCode}" max usage exceeded`);
+        return { finalPrice: subtotal, voucherId: null };
+    }
+
+    // Apply discount
+    let discount = 0;
+    if (voucher.discount_type === "percentage") {
+        discount = Math.floor(subtotal * (voucher.discount_value / 100));
+    } else {
+        // nominal
+        discount = voucher.discount_value;
+    }
+    const finalPrice = Math.max(subtotal - discount, 0);
+    console.log(`[yokke] Voucher "${voucher.code}" applied: type=${voucher.discount_type}, value=${voucher.discount_value}, discount=${discount}, final=${finalPrice}`);
+
+    // Increment voucher usage
+    await supabase
+        .from("voucher")
+        .update({ current_usage: voucher.current_usage + 1 })
+        .eq("id", voucher.id);
+
+    return { finalPrice, voucherId: voucher.id };
 }
 
 // ─── Pending payment record ───────────────────────────────────────────────────
@@ -251,8 +320,13 @@ async function storePendingPayment(
 
 // ─── QR generation ────────────────────────────────────────────────────────────
 
-async function generateQR(boothid: string, uuid: string): Promise<YokkeQRResponse> {
-    console.log("[yokke] Starting QR generation process for booth:", boothid, "uuid:", uuid);
+async function generateQR(
+    boothid: string,
+    uuid: string,
+    jumlahPrint: number,
+    voucherCode: string | null | undefined,
+): Promise<YokkeQRResponse & { voucherId: string | null }> {
+    console.log("[yokke] Starting QR generation process for booth:", boothid, "uuid:", uuid, "jumlahPrint:", jumlahPrint, "voucher:", voucherCode);
 
     // Validate environment variables first
     const requiredEnv = {
@@ -273,9 +347,14 @@ async function generateQR(boothid: string, uuid: string): Promise<YokkeQRRespons
     const timestamp = getTimestamp();
     const partnerRef = generatePartnerRef();
     const externalId = generateExternalId();
-    const price = await getPriceByBoothId(boothid);
-    const priceStr = `${price}.00`;
-    console.log(`[yokke] Pricing for QR generation: ${price} (amount: ${priceStr})`);
+
+    // Compute final price: basePrice × jumlah_print − voucher discount
+    const { finalPrice, voucherId } = await computeFinalPrice(boothid, jumlahPrint, voucherCode);
+    if (finalPrice <= 0) {
+        throw new Error("Final price must be greater than 0");
+    }
+    const priceStr = `${finalPrice}.00`;
+    console.log(`[yokke] Final price for QR generation: ${finalPrice} (amount: ${priceStr})`);
 
     const body: YokkeQRRequest = {
         partnerReferenceNo: partnerRef,
@@ -343,7 +422,7 @@ async function generateQR(boothid: string, uuid: string): Promise<YokkeQRRespons
 
     await storePendingPayment(partnerRef, data.referenceNo ?? null, externalId, boothid, uuid);
 
-    return { ...data, partnerReferenceNo: partnerRef };
+    return { ...data, partnerReferenceNo: partnerRef, voucherId };
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -353,10 +432,25 @@ export async function POST(request: Request) {
     const boothid = split[split.length - 2];
     const uuid = randomUUID();
 
-    console.log(`[yokke] POST request received for boothid: ${boothid}, generated request uuid: ${uuid}`);
+    // Parse request body
+    let jumlahPrint = 1;
+    let voucherCode: string | null = null;
+    try {
+        const reqBody = await request.json();
+        if (reqBody.jumlah_print && typeof reqBody.jumlah_print === "number" && reqBody.jumlah_print > 0) {
+            jumlahPrint = reqBody.jumlah_print;
+        }
+        if (reqBody.voucher && typeof reqBody.voucher === "string") {
+            voucherCode = reqBody.voucher;
+        }
+    } catch {
+        // No body or invalid JSON — use defaults
+    }
+
+    console.log(`[yokke] POST request received for boothid: ${boothid}, uuid: ${uuid}, jumlah_print: ${jumlahPrint}, voucher: ${voucherCode}`);
 
     try {
-        const data = await generateQR(boothid, uuid);
+        const data = await generateQR(boothid, uuid, jumlahPrint, voucherCode);
         console.log(`[yokke] POST request succeeded for boothid: ${boothid}, uuid: ${uuid}`);
         return NextResponse.json({ success: true, data: { ...data, uuid } });
     } catch (error) {
