@@ -17,10 +17,18 @@ function getInquiryUrl() {
         : `${SANDBOX_BASE}${INQUIRY_PATH}`;
 }
 
-// ─── Timestamp ────────────────────────────────────────────────────────────────
+// ─── Timestamp (WIB / GMT+7) ──────────────────────────────────────────────────
 
 function getTimestamp(): string {
-    return new Date().toISOString().replace(/\.\d{3}Z$/, "+07:00");
+    const now = new Date();
+    const wib = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const y = wib.getUTCFullYear();
+    const m = String(wib.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(wib.getUTCDate()).padStart(2, "0");
+    const H = String(wib.getUTCHours()).padStart(2, "0");
+    const M = String(wib.getUTCMinutes()).padStart(2, "0");
+    const S = String(wib.getUTCSeconds()).padStart(2, "0");
+    return `${y}-${m}-${d}T${H}:${M}:${S}+07:00`;
 }
 
 // ─── API call signature (HMAC-SHA512) ─────────────────────────────────────────
@@ -106,48 +114,84 @@ function buildTokenSignature(clientKey: string, timestamp: string): string {
 const SANDBOX_TOKEN_URL = `${SANDBOX_BASE}/qr/v2.0/access-token/b2b`;
 const PROD_TOKEN_URL    = `${PROD_BASE}/qr/v2.0/access-token/b2b`;
 
+// ─── Token cache (reuse for up to 50 min) ─────────────────────────────────────
+
+const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
 async function getAccessToken(): Promise<string> {
+    // Return cached token if still valid
+    if (cachedToken && Date.now() < cachedToken.expiresAt) {
+        console.log("[yokke] Using cached access token for notify (expires in", Math.round((cachedToken.expiresAt - Date.now()) / 1000), "s)");
+        return cachedToken.token;
+    }
+
     const clientKey = env.yokkeClientKey!;
     const timestamp = getTimestamp();
     const signature = buildTokenSignature(clientKey, timestamp);
+
+    const headers = {
+        "Content-Type": "application/json",
+        "X-CLIENT-KEY": clientKey,
+        "X-TIMESTAMP":  timestamp,
+        "X-SIGNATURE":  signature,
+        "X-PLATFORM":   "PORTAL",
+    };
+    console.log("[yokke] Access token request headers (notify):", headers);
 
     const res = await fetch(
         env.yokkeIsProduction ? PROD_TOKEN_URL : SANDBOX_TOKEN_URL,
         {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-CLIENT-KEY": clientKey,
-                "X-TIMESTAMP":  timestamp,
-                "X-SIGNATURE":  signature,
-                "X-PLATFORM":   "PORTAL",
-            },
+            headers,
             body: JSON.stringify({ grantType: "client_credentials" }),
         },
     );
 
     if (!res.ok) throw new Error("Failed to get Yokke access token for inquiry");
     const data = await res.json();
-    return data.accessToken as string;
+
+    // Cache the token
+    cachedToken = { token: data.accessToken as string, expiresAt: Date.now() + TOKEN_TTL_MS };
+    return cachedToken.token;
 }
 
 // ─── Pending payment lookup ───────────────────────────────────────────────────
 
+/**
+ * Look up pending payment by originalExternalID (= QR Generate X-EXTERNAL-ID).
+ * Falls back to yokke_reference_no if external_id lookup fails.
+ */
 async function lookupPendingPayment(
+    originalExternalId: string,
     yokkeReferenceNo: string,
-): Promise<{ boothId: string; uuid: string } | null> {
+): Promise<{ boothId: string; uuid: string; externalId: string } | null> {
     const supabase = await db();
+
+    // Primary lookup: by external_id (the canonical link)
     const { data, error } = await supabase
         .from("yokke_pending_payments")
-        .select("booth_id, uuid")
+        .select("booth_id, uuid, external_id")
+        .eq("external_id", originalExternalId)
+        .single();
+
+    if (!error && data) {
+        return { boothId: data.booth_id, uuid: data.uuid, externalId: data.external_id };
+    }
+
+    // Fallback: by yokke_reference_no (for older records without external_id)
+    console.warn("[yokke] external_id lookup failed, trying yokke_reference_no:", yokkeReferenceNo);
+    const { data: fallback, error: fbError } = await supabase
+        .from("yokke_pending_payments")
+        .select("booth_id, uuid, external_id")
         .eq("yokke_reference_no", yokkeReferenceNo)
         .single();
 
-    if (error || !data) {
-        console.warn("[yokke] No pending payment found for ref:", yokkeReferenceNo);
+    if (fbError || !fallback) {
+        console.warn("[yokke] No pending payment found for externalId:", originalExternalId, "or ref:", yokkeReferenceNo);
         return null;
     }
-    return { boothId: data.booth_id, uuid: data.uuid };
+    return { boothId: fallback.booth_id, uuid: fallback.uuid, externalId: fallback.external_id ?? originalExternalId };
 }
 
 // ─── Save payment ─────────────────────────────────────────────────────────────
@@ -216,19 +260,26 @@ export async function POST(request: Request) {
 
     try {
         // 1. Look up our internal boothid + uuid from the pending payments table
-        const pending = await lookupPendingPayment(originalReferenceNo);
+        //    Link: QR Generate.X-EXTERNAL-ID <===> Payment Notify.originalExternalID
+        const originalExternalId = body.originalExternalID;
+        const pending = await lookupPendingPayment(
+            originalExternalId ?? originalReferenceNo,
+            originalReferenceNo,
+        );
         if (!pending) {
-            throw new Error(`No pending payment for Yokke ref: ${originalReferenceNo}`);
+            throw new Error(`No pending payment for externalId: ${originalExternalId} / ref: ${originalReferenceNo}`);
         }
-        const { boothId, uuid } = pending;
+        const { boothId, uuid, externalId } = pending;
 
         // 2. Call inquiry to double-verify with Yokke
+        //    QR Inquiry.originalReferenceNo = QR Generate.referenceNo
+        //    QR Inquiry.originalExternalId  = QR Generate.X-EXTERNAL-ID
         const txDate = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
         const accessToken = await getAccessToken();
         const inquiry = await inquireTransaction(
             accessToken,
             originalReferenceNo,
-            body.additionalInfo?.issuerReferenceID ?? originalReferenceNo,
+            externalId,
             txDate,
         );
 
@@ -266,6 +317,7 @@ type MoneyField = { value: string; currency: string };
 
 type YokkeNotifyPayload = {
     originalReferenceNo:     string;
+    originalExternalID?:     string; // = QR Generate X-EXTERNAL-ID
     latestTransactionStatus: string; // "00" = success
     transactionStatusDesc:   string;
     customerNumber?:         string;

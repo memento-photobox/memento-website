@@ -5,7 +5,7 @@ import { env } from "@/app/env";
 
 // ─── URL helpers ──────────────────────────────────────────────────────────────
 
-const SANDBOX_BASE = "https://tst.yokke.co.id:7778/qrissnapmpm/1.0.11";
+const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
 const PROD_BASE = "https://api.yokke.co.id:7778";
 
 function getBase() {
@@ -18,47 +18,105 @@ const GENERATE_PATH = "/v2.0/qr/qr-mpm-generate";
 function getTokenUrl() { return `${getBase()}${TOKEN_PATH}`; }
 function getGenerateUrl() { return `${getBase()}${GENERATE_PATH}`; }
 
-// ─── Timestamp ────────────────────────────────────────────────────────────────
+// ─── Timestamp (WIB / GMT+7) ──────────────────────────────────────────────────
 
 function getTimestamp(): string {
-    return new Date().toISOString().replace(/\.\d{3}Z$/, "+07:00");
+    const now = new Date();
+    // Shift to WIB (UTC+7) by adding 7 hours worth of ms
+    const wib = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    // Format as ISO-like string using the shifted UTC values
+    const y = wib.getUTCFullYear();
+    const m = String(wib.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(wib.getUTCDate()).padStart(2, "0");
+    const H = String(wib.getUTCHours()).padStart(2, "0");
+    const M = String(wib.getUTCMinutes()).padStart(2, "0");
+    const S = String(wib.getUTCSeconds()).padStart(2, "0");
+    return `${y}-${m}-${d}T${H}:${M}:${S}+07:00`;
 }
 
 // ─── Access token ─────────────────────────────────────────────────────────────
 function buildTokenSignature(clientKey: string, timestamp: string): string {
     const privateKey = env.yokkePrivateKey!;
     const stringToSign = `${clientKey}|${timestamp}`;
-    const signer = createSign("SHA256");
-    signer.update(stringToSign);
-    return signer.sign(privateKey, "base64");
+    console.log("[yokke] Building token signature with stringToSign:", stringToSign);
+    try {
+        const signer = createSign("SHA256");
+        signer.update(stringToSign);
+        const signature = signer.sign(privateKey, "base64");
+        const sigBytes = Buffer.from(signature, "base64").length;
+        console.log("[yokke] Token signature generated:", {
+            encoding: "base64",
+            signatureBase64Length: signature.length,
+            signatureRawBytes: sigBytes,
+            keyBits: sigBytes * 8,
+            signature,
+        });
+        return signature;
+    } catch (e) {
+        console.error("[yokke] Error generating token signature (RSA sign failed):", e);
+        throw e;
+    }
 }
 
+// ─── Token cache (reuse for up to 50 min) ─────────────────────────────────────
+
+const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
 async function getAccessToken(): Promise<string> {
+    // Return cached token if still valid
+    if (cachedToken && Date.now() < cachedToken.expiresAt) {
+        console.log("[yokke] Using cached access token (expires in", Math.round((cachedToken.expiresAt - Date.now()) / 1000), "s)");
+        return cachedToken.token;
+    }
+
     const clientKey = env.yokkeClientKey!;
     const timestamp = getTimestamp();
     const signature = buildTokenSignature(clientKey, timestamp);
+    const url = getTokenUrl();
 
-    const res = await fetch(getTokenUrl(), {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-CLIENT-KEY": clientKey,
-            "X-TIMESTAMP": timestamp,
-            "X-SIGNATURE": signature,
-            "X-PLATFORM": "PORTAL",
-        },
-        body: JSON.stringify({ grantType: "client_credentials" }),
-    });
+    const headers = {
+        "Content-Type": "application/json",
+        "X-CLIENT-KEY": clientKey || "",
+        "X-TIMESTAMP": timestamp,
+        "X-SIGNATURE": signature,
+        "X-PLATFORM": "PORTAL",
+    };
+    console.log("[yokke] Access token request headers:", headers);
 
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error("[yokke] access token error:", err);
-        throw new Error("Failed to get Yokke access token");
+    console.log("[yokke] Requesting access token from URL:", url);
+    let res;
+    try {
+        res = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ grantType: "client_credentials" }),
+        });
+    } catch (fetchErr) {
+        console.error("[yokke] Access token fetch request failed (network error):", fetchErr);
+        throw fetchErr;
     }
 
-    const data = await res.json();
-    console.log("[yokke] access token obtained");
-    return data.accessToken as string;
+    if (!res.ok) {
+        const resText = await res.text().catch(() => "");
+        let errJson: Record<string, unknown> = {};
+        try {
+            errJson = JSON.parse(resText);
+        } catch {}
+        console.error(`[yokke] Access token error: HTTP status ${res.status} (${res.statusText}). Response:`, errJson || resText);
+        throw new Error(`Failed to get Yokke access token (HTTP ${res.status})`);
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!data.accessToken) {
+        console.error("[yokke] Access token response did not contain accessToken:", data);
+        throw new Error("Access token missing in Yokke response");
+    }
+    console.log("[yokke] Access token successfully obtained:", data.accessToken.substring(0, 10) + "...");
+
+    // Cache the token
+    cachedToken = { token: data.accessToken as string, expiresAt: Date.now() + TOKEN_TTL_MS };
+    return cachedToken.token;
 }
 
 // ─── API call signature (HMAC-SHA512) ─────────────────────────────────────────
@@ -77,13 +135,33 @@ function buildApiSignature(
     body: object,
     timestamp: string,
 ): string {
+    const bodyStr = JSON.stringify(body);
     const bodyHash = createHash("sha256")
-        .update(JSON.stringify(body))
+        .update(bodyStr)
         .digest("hex")
         .toLowerCase();
 
     const stringToSign = [method, endpointPath, accessToken, bodyHash, timestamp].join(":");
-    return createHmac("sha512", env.yokkeClientSecret!).update(stringToSign).digest("base64");
+    console.log("[yokke] Building API signature:", {
+        method,
+        endpointPath,
+        accessTokenSummary: `${accessToken.substring(0, 10)}...`,
+        bodyStr,
+        bodyHash,
+        timestamp,
+        stringToSign
+    });
+
+    try {
+        const signature = createHmac("sha512", env.yokkeClientSecret!)
+            .update(stringToSign)
+            .digest("base64");
+        console.log("[yokke] API signature generated successfully");
+        return signature;
+    } catch (e) {
+        console.error("[yokke] Error generating API signature (HMAC failed):", e);
+        throw e;
+    }
 }
 
 // ─── Unique reference generators ────────────────────────────────────────────
@@ -143,72 +221,127 @@ async function getPriceByBoothId(boothid: string): Promise<number> {
 async function storePendingPayment(
     partnerReferenceNo: string,
     yokkeReferenceNo: string | null,
+    externalId: string,
     boothid: string,
     uuid: string,
 ): Promise<void> {
     const supabase = await db();
+    console.log("[yokke] Storing pending payment in database:", {
+        partnerReferenceNo,
+        yokkeReferenceNo,
+        externalId,
+        boothid,
+        uuid,
+    });
     const { error } = await supabase
         .from("yokke_pending_payments")
         .insert({
             partner_reference_no: partnerReferenceNo,
             yokke_reference_no: yokkeReferenceNo,
+            external_id: externalId,
             booth_id: boothid,
             uuid: uuid,
         });
     if (error) {
-        console.error("[yokke] Failed to store pending payment:", error);
+        console.error("[yokke] Failed to store pending payment in Supabase:", error);
+    } else {
+        console.log("[yokke] Pending payment stored successfully in Supabase");
     }
 }
 
 // ─── QR generation ────────────────────────────────────────────────────────────
 
 async function generateQR(boothid: string, uuid: string): Promise<YokkeQRResponse> {
+    console.log("[yokke] Starting QR generation process for booth:", boothid, "uuid:", uuid);
+
+    // Validate environment variables first
+    const requiredEnv = {
+        yokkeMerchantId: env.yokkeMerchantId,
+        yokkeTerminalId: env.yokkeTerminalId,
+        yokkePartnerId: env.yokkePartnerId,
+        yokkeClientKey: env.yokkeClientKey,
+        yokkePrivateKeyExists: !!env.yokkePrivateKey,
+        yokkeClientSecretExists: !!env.yokkeClientSecret,
+    };
+    console.log("[yokke] Checking environment variables:", requiredEnv);
+
+    if (!env.yokkeMerchantId || !env.yokkeTerminalId || !env.yokkePartnerId || !env.yokkeClientKey || !env.yokkePrivateKey || !env.yokkeClientSecret) {
+        throw new Error("Missing required Yokke environment variables");
+    }
+
     const accessToken = await getAccessToken();
     const timestamp = getTimestamp();
-    const partnerRef = env.yokkeTestCase ?? generatePartnerRef();
+    const partnerRef = generatePartnerRef();
     const externalId = generateExternalId();
-    if (env.yokkeTestCase) {
-        console.log("[yokke] using test-case partnerRef:", partnerRef);
-    }
     const price = await getPriceByBoothId(boothid);
     const priceStr = `${price}.00`;
+    console.log(`[yokke] Pricing for QR generation: ${price} (amount: ${priceStr})`);
 
     const body: YokkeQRRequest = {
-        merchantId: env.yokkeMerchantId!,
-        terminalId: env.yokkeTerminalId!,
         partnerReferenceNo: partnerRef,
         amount: { value: priceStr, currency: "IDR" },
         feeAmount: { value: priceStr, currency: "IDR" },
+        merchantId: env.yokkeMerchantId,
+        terminalId: env.yokkeTerminalId,
     };
 
     const signature = buildApiSignature("POST", GENERATE_PATH, accessToken, body, timestamp);
+    const url = getGenerateUrl();
 
-    console.log("[yokke] generating QR for booth:", boothid, "partnerRef:", partnerRef);
+    const loggedHeaders = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken.substring(0, 10)}...`,
+        "X-TIMESTAMP": timestamp,
+        "X-SIGNATURE": signature,
+        "X-EXTERNAL-ID": externalId,
+        "X-PARTNER-ID": env.yokkePartnerId,
+        "CHANNEL-ID": env.yokkeChannelId ?? "02",
+    };
 
-    const res = await fetch(getGenerateUrl(), {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${accessToken}`,
-            "X-TIMESTAMP": timestamp,
-            "X-SIGNATURE": signature,
-            "X-EXTERNAL-ID": externalId,
-            "X-PARTNER-ID": env.yokkePartnerId!,
-            "CHANNEL-ID": env.yokkeChannelId ?? "02",
-        },
-        body: JSON.stringify(body),
+    console.log("[yokke] Sending QR Generate request details:", {
+        url,
+        headers: loggedHeaders,
+        body,
     });
 
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error("[yokke] QR generate error:", err);
-        throw new Error(err.responseMessage ?? "Failed to generate Yokke QR");
+    let res;
+    try {
+        res = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${accessToken}`,
+                "X-TIMESTAMP": timestamp,
+                "X-SIGNATURE": signature,
+                "X-EXTERNAL-ID": externalId,
+                "X-PARTNER-ID": env.yokkePartnerId,
+                "CHANNEL-ID": env.yokkeChannelId ?? "02",
+            },
+            body: JSON.stringify(body),
+        });
+    } catch (fetchErr) {
+        console.error("[yokke] QR generate fetch request failed (network error):", fetchErr);
+        throw fetchErr;
     }
 
-    const data: YokkeQRResponse = await res.json();
-    console.log("[yokke] QR generated, referenceNo:", data.referenceNo);
+    if (!res.ok) {
+        const resText = await res.text().catch(() => "");
+        let errJson: { responseMessage?: string } = {};
+        try {
+            errJson = JSON.parse(resText);
+        } catch {}
+        console.error(`[yokke] QR generate error: HTTP status ${res.status} (${res.statusText}). Response:`, errJson || resText);
+        throw new Error(errJson.responseMessage ?? `Failed to generate Yokke QR (HTTP ${res.status})`);
+    }
 
-    await storePendingPayment(partnerRef, data.referenceNo ?? null, boothid, uuid);
+    const data: YokkeQRResponse = await res.json().catch(() => ({}));
+    console.log("[yokke] QR API response received successfully:", data);
+
+    if (!data.qrContent) {
+        console.warn("[yokke] QR API response is missing qrContent field:", data);
+    }
+
+    await storePendingPayment(partnerRef, data.referenceNo ?? null, externalId, boothid, uuid);
 
     return { ...data, partnerReferenceNo: partnerRef };
 }
@@ -220,11 +353,14 @@ export async function POST(request: Request) {
     const boothid = split[split.length - 2];
     const uuid = randomUUID();
 
+    console.log(`[yokke] POST request received for boothid: ${boothid}, generated request uuid: ${uuid}`);
+
     try {
         const data = await generateQR(boothid, uuid);
+        console.log(`[yokke] POST request succeeded for boothid: ${boothid}, uuid: ${uuid}`);
         return NextResponse.json({ success: true, data: { ...data, uuid } });
     } catch (error) {
-        console.error("[yokke] POST error:", error);
+        console.error(`[yokke] POST request failed for boothid: ${boothid}, uuid: ${uuid}. Error:`, error);
         return NextResponse.json({ success: false, error: String(error) }, { status: 400 });
     }
 }

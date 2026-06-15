@@ -31,8 +31,7 @@ export const env = {
     yokkeClientSecret: process.env.YOKKE_CLIENT_SECRET, // HMAC-SHA512 secret for API call signatures
     yokkePartnerId: process.env.YOKKE_PARTNER_ID,       // X-PARTNER-ID
     yokkeChannelId: process.env.YOKKE_CHANNEL_ID,       // CHANNEL-ID (e.g. "02")
-    yokkeMerchantId: process.env.YOKKE_MERCHANT_ID,     // merchantId in request body
+    yokkeMerchantId: (process.env.YOKKE_MERCHANT_ID ?? "").padStart(15, "0"), // merchantId padded to 15 chars
     yokkeTerminalId: process.env.YOKKE_TERMINAL_ID,     // terminalId in request body
-    yokkeTestCase: process.env.YOKKE_TEST_CASE || null,
 
 }
