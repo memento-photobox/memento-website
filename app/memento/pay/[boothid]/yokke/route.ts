@@ -359,7 +359,7 @@ async function generateQR(
     const body: YokkeQRRequest = {
         partnerReferenceNo: partnerRef,
         amount: { value: priceStr, currency: "IDR" },
-        feeAmount: { value: priceStr, currency: "IDR" },
+        feeAmount: { value: "0.00", currency: "IDR" },
         merchantId: env.yokkeMerchantId,
         terminalId: env.yokkeTerminalId,
     };
