@@ -274,7 +274,8 @@ export async function POST(request: Request) {
         // 2. Call inquiry to double-verify with Yokke
         //    QR Inquiry.originalReferenceNo = QR Generate.referenceNo
         //    QR Inquiry.originalExternalId  = QR Generate.X-EXTERNAL-ID
-        const txDate = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+        const wibNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
+        const txDate = wibNow.toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD in WIB
         const accessToken = await getAccessToken();
         const inquiry = await inquireTransaction(
             accessToken,
