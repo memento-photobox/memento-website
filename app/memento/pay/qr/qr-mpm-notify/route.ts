@@ -268,10 +268,11 @@ export async function POST(request: Request) {
 
     try {
         // 1. Look up our internal boothid + uuid from the pending payments table
-        //    Primary: PaymentNotify.originalExternalId → DB external_id
+        //    Primary: PaymentNotify.originalExternalID → DB external_id
         //    Fallback: notify.originalReferenceNo → DB yokke_reference_no
-        const notifyBody = body as Record<string, unknown>;
-        const originalExternalId = (body.originalExternalID ?? notifyBody.originalExternalId) as string | undefined;
+        const rawBody = body as Record<string, unknown>;
+        const originalExternalId = (rawBody["originalExternalID"] ?? rawBody["originalExternalId"]) as string | undefined;
+        console.log("[yokke] notify body keys:", Object.keys(rawBody));
         console.log("[yokke] notify fields for lookup — originalExternalId:", originalExternalId, "originalReferenceNo:", originalReferenceNo);
         const pending = await lookupPendingPayment(
             originalExternalId,
