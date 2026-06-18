@@ -159,45 +159,46 @@ async function getAccessToken(): Promise<string> {
 // ─── Pending payment lookup ───────────────────────────────────────────────────
 
 /**
- * Look up pending payment by yokke_reference_no (= notify's originalReferenceNo
- * = QR Generate response referenceNo).
- * Falls back to external_id if originalExternalID is available.
+ * Look up pending payment by external_id first (the documented link between
+ * PaymentNotify.originalExternalId ↔ QRGenerate.X-EXTERNAL-ID).
+ * Falls back to yokke_reference_no.
  */
 async function lookupPendingPayment(
-    yokkeReferenceNo: string,
     originalExternalId: string | undefined,
+    yokkeReferenceNo: string,
 ): Promise<{ boothId: string; uuid: string; externalId: string } | null> {
     const supabase = await db();
 
-    // Primary lookup: by yokke_reference_no (notify.originalReferenceNo = QR Generate.referenceNo)
-    console.log("[yokke] Looking up pending payment by yokke_reference_no:", yokkeReferenceNo);
-    const { data, error } = await supabase
-        .from("yokke_pending_payments")
-        .select("booth_id, uuid, external_id")
-        .eq("yokke_reference_no", yokkeReferenceNo)
-        .single();
-
-    if (!error && data) {
-        console.log("[yokke] Found pending payment by yokke_reference_no:", { boothId: data.booth_id, uuid: data.uuid, externalId: data.external_id });
-        return { boothId: data.booth_id, uuid: data.uuid, externalId: data.external_id };
-    }
-
-    // Fallback: by external_id (if notify includes originalExternalID)
+    // Primary lookup: by external_id (PaymentNotify.originalExternalId = QR Generate X-EXTERNAL-ID)
     if (originalExternalId) {
-        console.warn("[yokke] yokke_reference_no lookup failed, trying external_id:", originalExternalId);
-        const { data: fallback, error: fbError } = await supabase
+        console.log("[yokke] Looking up pending payment by external_id:", originalExternalId);
+        const { data, error } = await supabase
             .from("yokke_pending_payments")
             .select("booth_id, uuid, external_id")
             .eq("external_id", originalExternalId)
             .single();
 
-        if (!fbError && fallback) {
-            console.log("[yokke] Found pending payment by external_id:", { boothId: fallback.booth_id, uuid: fallback.uuid });
-            return { boothId: fallback.booth_id, uuid: fallback.uuid, externalId: fallback.external_id };
+        if (!error && data) {
+            console.log("[yokke] Found pending payment by external_id:", { boothId: data.booth_id, uuid: data.uuid });
+            return { boothId: data.booth_id, uuid: data.uuid, externalId: data.external_id };
         }
+        console.warn("[yokke] external_id lookup failed for:", originalExternalId);
     }
 
-    console.warn("[yokke] No pending payment found for ref:", yokkeReferenceNo, "externalId:", originalExternalId);
+    // Fallback: by yokke_reference_no
+    console.log("[yokke] Trying yokke_reference_no lookup:", yokkeReferenceNo);
+    const { data: fallback, error: fbError } = await supabase
+        .from("yokke_pending_payments")
+        .select("booth_id, uuid, external_id")
+        .eq("yokke_reference_no", yokkeReferenceNo)
+        .single();
+
+    if (!fbError && fallback) {
+        console.log("[yokke] Found pending payment by yokke_reference_no:", { boothId: fallback.booth_id, uuid: fallback.uuid, externalId: fallback.external_id });
+        return { boothId: fallback.booth_id, uuid: fallback.uuid, externalId: fallback.external_id };
+    }
+
+    console.warn("[yokke] No pending payment found for externalId:", originalExternalId, "ref:", yokkeReferenceNo);
     return null;
 }
 
@@ -267,15 +268,17 @@ export async function POST(request: Request) {
 
     try {
         // 1. Look up our internal boothid + uuid from the pending payments table
-        //    Primary: notify.originalReferenceNo → DB yokke_reference_no
-        //    Fallback: notify.originalExternalID → DB external_id
-        const originalExternalId = body.originalExternalID;
+        //    Primary: PaymentNotify.originalExternalId → DB external_id
+        //    Fallback: notify.originalReferenceNo → DB yokke_reference_no
+        const notifyBody = body as Record<string, unknown>;
+        const originalExternalId = (body.originalExternalID ?? notifyBody.originalExternalId) as string | undefined;
+        console.log("[yokke] notify fields for lookup — originalExternalId:", originalExternalId, "originalReferenceNo:", originalReferenceNo);
         const pending = await lookupPendingPayment(
-            originalReferenceNo,
             originalExternalId,
+            originalReferenceNo,
         );
         if (!pending) {
-            throw new Error(`No pending payment for ref: ${originalReferenceNo} / externalId: ${originalExternalId}`);
+            throw new Error(`No pending payment for externalId: ${originalExternalId} / ref: ${originalReferenceNo}`);
         }
         const { boothId, uuid, externalId } = pending;
 
@@ -326,7 +329,8 @@ type MoneyField = { value: string; currency: string };
 
 type YokkeNotifyPayload = {
     originalReferenceNo:     string;
-    originalExternalID?:     string; // = QR Generate X-EXTERNAL-ID
+    originalExternalID?:     string; // QR Generate X-EXTERNAL-ID (uppercase ID)
+    originalExternalId?:     string; // QR Generate X-EXTERNAL-ID (camelCase)
     latestTransactionStatus: string; // "00" = success
     transactionStatusDesc:   string;
     customerNumber?:         string;
