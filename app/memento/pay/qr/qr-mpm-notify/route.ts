@@ -6,8 +6,8 @@ import { Memento } from "../../../types";
 import { checkAndSendNoticePrint } from "../../notice-check";
 
 
-const SANDBOX_BASE = "https://tst.yokke.co.id:8280/qrissnapmpm/1.0.11";
-const PROD_BASE    = "https://api.yokke.co.id:7778";
+const SANDBOX_BASE = "https://tst.yokke.co.id:7778/qrissnapmpm/1.0.11";
+const PROD_BASE = "https://api.yokke.co.id:7778";
 
 const INQUIRY_PATH = "/v3.0/qr/qr-mpm-query";
 
@@ -80,13 +80,13 @@ async function inquireTransaction(
     const res = await fetch(getInquiryUrl(), {
         method: "POST",
         headers: {
-            "Content-Type":  "application/json",
+            "Content-Type": "application/json",
             "Authorization": `Bearer ${accessToken}`,
-            "X-TIMESTAMP":   timestamp,
-            "X-SIGNATURE":   signature,
+            "X-TIMESTAMP": timestamp,
+            "X-SIGNATURE": signature,
             "X-EXTERNAL-ID": externalId,
-            "X-PARTNER-ID":  env.yokkePartnerId!,
-            "CHANNEL-ID":    env.yokkeChannelId ?? "02",
+            "X-PARTNER-ID": env.yokkePartnerId!,
+            "CHANNEL-ID": env.yokkeChannelId ?? "02",
         },
         body: JSON.stringify(body),
     });
@@ -112,7 +112,7 @@ function buildTokenSignature(clientKey: string, timestamp: string): string {
 }
 
 const SANDBOX_TOKEN_URL = `${SANDBOX_BASE}/qr/v2.0/access-token/b2b`;
-const PROD_TOKEN_URL    = `${PROD_BASE}/qr/v2.0/access-token/b2b`;
+const PROD_TOKEN_URL = `${PROD_BASE}/qr/v2.0/access-token/b2b`;
 
 // ─── Token cache (reuse for up to 50 min) ─────────────────────────────────────
 
@@ -133,9 +133,9 @@ async function getAccessToken(): Promise<string> {
     const headers = {
         "Content-Type": "application/json",
         "X-CLIENT-KEY": clientKey,
-        "X-TIMESTAMP":  timestamp,
-        "X-SIGNATURE":  signature,
-        "X-PLATFORM":   "PORTAL",
+        "X-TIMESTAMP": timestamp,
+        "X-SIGNATURE": signature,
+        "X-PLATFORM": "PORTAL",
     };
     console.log("[yokke] Access token request headers (notify):", headers);
 
@@ -233,7 +233,7 @@ async function savePayment(
 /** Yokke expects exactly this shape when the notify is accepted. */
 function successResponse() {
     return NextResponse.json({
-        responseCode:    "2005200",
+        responseCode: "2005200",
         responseMessage: "Successful",
     });
 }
@@ -307,7 +307,7 @@ export async function POST(request: Request) {
         }
 
         // 3. Save the payment
-        const revenue    = amount?.value ?? "0";
+        const revenue = amount?.value ?? "0";
         const additional = body.additionalInfo?.approvalCode ?? "";
 
         const memento = await savePayment(revenue, additional, uuid, boothId);
@@ -333,44 +333,44 @@ export async function POST(request: Request) {
 type MoneyField = { value: string; currency: string };
 
 type YokkeNotifyPayload = {
-    originalReferenceNo:     string;
-    originalExternalID?:     string; // QR Generate X-EXTERNAL-ID (uppercase ID)
-    originalExternalId?:     string; // QR Generate X-EXTERNAL-ID (camelCase)
+    originalReferenceNo: string;
+    originalExternalID?: string; // QR Generate X-EXTERNAL-ID (uppercase ID)
+    originalExternalId?: string; // QR Generate X-EXTERNAL-ID (camelCase)
     latestTransactionStatus: string; // "00" = success
-    transactionStatusDesc:   string;
-    customerNumber?:         string;
-    destinationNumber?:      string;
-    amount?:                 MoneyField;
-    bankCode?:               string;
+    transactionStatusDesc: string;
+    customerNumber?: string;
+    destinationNumber?: string;
+    amount?: MoneyField;
+    bankCode?: string;
     additionalInfo?: {
-        merchantId?:          string;
-        terminalId?:          string;
-        approvalCode?:        string;
-        issuerReferenceID?:   string;
-        customerName?:        string;
-        issuerName?:          string;
-        originalExternalID?:  string;
-        originalExternalId?:  string;
+        merchantId?: string;
+        terminalId?: string;
+        approvalCode?: string;
+        issuerReferenceID?: string;
+        customerName?: string;
+        issuerName?: string;
+        originalExternalID?: string;
+        originalExternalId?: string;
     };
 };
 
 type YokkeInquiryResponse = {
-    responseCode:            string;
-    responseMessage:         string;
-    originalReferenceNo:     string;
-    originalExternalId:      string;
-    serviceCode:             string;
+    responseCode: string;
+    responseMessage: string;
+    originalReferenceNo: string;
+    originalExternalId: string;
+    serviceCode: string;
     latestTransactionStatus: string;
-    transactionStatusDesc:   string;
-    paidTime?:               string;
-    amount?:                 MoneyField;
-    feeAmount?:              MoneyField;
-    terminalId?:             string;
+    transactionStatusDesc: string;
+    paidTime?: string;
+    amount?: MoneyField;
+    feeAmount?: MoneyField;
+    terminalId?: string;
     additionalInfo?: {
-        merchantId?:       string;
-        approvalCode?:     string;
-        customerName?:     string;
-        issuerName?:       string;
+        merchantId?: string;
+        approvalCode?: string;
+        customerName?: string;
+        issuerName?: string;
         issuerReferenceID?: string;
     };
 };
