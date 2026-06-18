@@ -271,7 +271,11 @@ export async function POST(request: Request) {
         //    Primary: PaymentNotify.originalExternalID → DB external_id
         //    Fallback: notify.originalReferenceNo → DB yokke_reference_no
         const rawBody = body as Record<string, unknown>;
-        const originalExternalId = (rawBody["originalExternalID"] ?? rawBody["originalExternalId"]) as string | undefined;
+        const additionalInfoRaw = (rawBody["additionalInfo"] ?? {}) as Record<string, unknown>;
+        const originalExternalId = (
+            additionalInfoRaw["originalExternalID"] ?? additionalInfoRaw["originalExternalId"] ??
+            rawBody["originalExternalID"] ?? rawBody["originalExternalId"]
+        ) as string | undefined;
         console.log("[yokke] notify body keys:", Object.keys(rawBody));
         console.log("[yokke] notify fields for lookup — originalExternalId:", originalExternalId, "originalReferenceNo:", originalReferenceNo);
         const pending = await lookupPendingPayment(
@@ -339,12 +343,14 @@ type YokkeNotifyPayload = {
     amount?:                 MoneyField;
     bankCode?:               string;
     additionalInfo?: {
-        merchantId?:       string;
-        terminalId?:       string;
-        approvalCode?:     string;
-        issuerReferenceID?: string;
-        customerName?:     string;
-        issuerName?:       string;
+        merchantId?:          string;
+        terminalId?:          string;
+        approvalCode?:        string;
+        issuerReferenceID?:   string;
+        customerName?:        string;
+        issuerName?:          string;
+        originalExternalID?:  string;
+        originalExternalId?:  string;
     };
 };
 
