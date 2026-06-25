@@ -6,7 +6,7 @@ import { Memento } from "../../../types";
 import { checkAndSendNoticePrint } from "../../notice-check";
 
 
-const SANDBOX_BASE = "https://tst.yokke.co.id:7778/qrissnapmpm/1.0.11";
+const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
 const PROD_BASE = "https://api.yokke.co.id:7778";
 
 const INQUIRY_PATH = "/v3.0/qr/qr-mpm-query";
