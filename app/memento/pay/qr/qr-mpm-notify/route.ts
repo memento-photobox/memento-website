@@ -101,7 +101,6 @@ async function inquireTransaction(
 }
 
 // ─── Access token (re-used from generate route logic) ────────────────────────
-// We import a small helper inline here to avoid circular deps.
 
 import { createSign } from "crypto";
 
