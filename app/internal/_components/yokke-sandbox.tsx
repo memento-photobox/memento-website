@@ -4,7 +4,10 @@ import { useMemo, useState } from "react";
 import {
     YOKKE_TEST_CASES,
     buildPreset,
+    buildQueryBody,
+    isPlaceholderQueryRef,
     matchExpected,
+    wibYyyymmdd,
     type SandboxDefaults,
     type YokkeTestCase,
 } from "../lib/test-cases";
@@ -33,6 +36,7 @@ type LastTxn = {
     referenceNo?: string;
     externalId?: string;
     partnerReferenceNo?: string;
+    originalTransactionDate?: string;
     qrContent?: string;
     uuid?: string;
 };
@@ -129,16 +133,7 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
     const [generateBody, setGenerateBody] = useState(() =>
         pretty(buildPreset(YOKKE_TEST_CASES[0], defaults).generateBody),
     );
-    const [queryBody, setQueryBody] = useState(() => pretty(buildPreset(YOKKE_TEST_CASES[0], defaults).queryBody ?? {
-        originalReferenceNo: "",
-        originalExternalId: "",
-        serviceCode: "47",
-        merchantId: defaults.merchantId,
-        additionalInfo: {
-            originalTransactionDate: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
-            terminalId: defaults.terminalId,
-        },
-    }));
+    const [queryBody, setQueryBody] = useState(() => pretty(buildQueryBody(defaults)));
     const [invalidToken, setInvalidToken] = useState(false);
     const [invalidSignature, setInvalidSignature] = useState(false);
     const [omitChannelId, setOmitChannelId] = useState(false);
@@ -154,11 +149,20 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
     const resultCode = typeof currentResult?.response?.responseCode === "string"
         ? currentResult.response.responseCode
         : "";
+    const latestStatus =
+        typeof queryResult?.response?.latestTransactionStatus === "string"
+            ? queryResult.response.latestTransactionStatus
+            : "";
+    const latestStatusDesc =
+        typeof queryResult?.response?.transactionStatusDesc === "string"
+            ? queryResult.response.transactionStatusDesc
+            : "";
     const verdict = currentResult
         ? matchExpected(active.expectedCode, resultCode || undefined)
             ? "PASS"
             : "FAIL"
         : null;
+    const needsUnpaidQr = active.id === "query-pending" || active.id === "query-success";
 
     const grouped = useMemo(() => {
         return GROUPS.map((group) => ({
@@ -187,61 +191,96 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         return parsed as Record<string, unknown>;
     }
 
+    function omitEmpty(value: Record<string, unknown>): Record<string, unknown> {
+        const next: Record<string, unknown> = {};
+        for (const [key, item] of Object.entries(value)) {
+            if (item === "" || item === undefined || item === null) continue;
+            if (item && typeof item === "object" && !Array.isArray(item)) {
+                next[key] = omitEmpty(item as Record<string, unknown>);
+            } else {
+                next[key] = item;
+            }
+        }
+        return next;
+    }
+
+    async function callYokke(action: "generate" | "query", body: Record<string, unknown>) {
+        const res = await fetch("/internal/api/yokke", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                action,
+                body: omitEmpty(body),
+                options: {
+                    invalidToken,
+                    invalidSignature,
+                    omitChannelId,
+                    storePending: action === "generate" ? storePending : false,
+                },
+            }),
+        });
+        const data = (await res.json()) as ApiResult & { success?: boolean; error?: string };
+        if (!res.ok || data.success === false) {
+            throw new Error(data.error || `Request failed (${res.status})`);
+        }
+        return data;
+    }
+
+    function applyGenerateResult(data: ApiResult, body: Record<string, unknown>) {
+        const nextTxn: LastTxn = {
+            referenceNo: data.referenceNo,
+            externalId: data.externalId,
+            partnerReferenceNo: data.partnerReferenceNo,
+            originalTransactionDate: wibYyyymmdd(),
+            qrContent: data.qrContent,
+            uuid: data.uuid,
+        };
+        setGenerateResult(data);
+        setLastTxn(nextTxn);
+        setQueryBody(pretty(buildQueryBody(defaults, nextTxn)));
+        try {
+            const nextBody = { ...body, partnerReferenceNo: Date.now().toString().padStart(20, "0").slice(-20) };
+            setGenerateBody(pretty(nextBody));
+        } catch {
+            // keep current generate body
+        }
+        return nextTxn;
+    }
+
     async function run(action: "generate" | "query") {
         setBusy(action);
         setError(null);
         try {
-            const body = parseBody(action === "query" ? queryBody : generateBody);
-            const res = await fetch("/internal/api/yokke", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    action,
-                    body,
-                    options: {
-                        invalidToken,
-                        invalidSignature,
-                        omitChannelId,
-                        storePending: action === "generate" ? storePending : false,
-                    },
-                }),
-            });
-            const data = (await res.json()) as ApiResult & { success?: boolean; error?: string };
-            if (!res.ok || data.success === false) {
-                throw new Error(data.error || `Request failed (${res.status})`);
+            if (action === "generate") {
+                const body = parseBody(generateBody);
+                const data = await callYokke("generate", body);
+                applyGenerateResult(data, body);
+                return;
             }
 
-            if (action === "generate") {
-                setGenerateResult(data);
-                const nextTxn: LastTxn = {
-                    referenceNo: data.referenceNo,
-                    externalId: data.externalId,
-                    partnerReferenceNo: data.partnerReferenceNo,
-                    qrContent: data.qrContent,
-                    uuid: data.uuid,
+            let inquiryBody = parseBody(queryBody);
+            const missingRef = isPlaceholderQueryRef(String(inquiryBody.originalReferenceNo || ""));
+            if (needsUnpaidQr && missingRef) {
+                const generatePayload = parseBody(generateBody);
+                const generated = await callYokke("generate", generatePayload);
+                const nextTxn = applyGenerateResult(generated, generatePayload);
+                if (!nextTxn.referenceNo && !nextTxn.partnerReferenceNo) {
+                    throw new Error("QR generate did not return a reference. Fix generate first, then Check Status.");
+                }
+                inquiryBody = buildQueryBody(defaults, nextTxn);
+                setQueryBody(pretty(inquiryBody));
+            } else if (needsUnpaidQr && missingRef === false && lastTxn.originalTransactionDate) {
+                inquiryBody = {
+                    ...inquiryBody,
+                    additionalInfo: {
+                        ...((inquiryBody.additionalInfo as Record<string, unknown>) ?? {}),
+                        originalTransactionDate: lastTxn.originalTransactionDate,
+                    },
                 };
-                setLastTxn(nextTxn);
-                if (data.referenceNo || data.externalId) {
-                    setQueryBody(pretty({
-                        originalReferenceNo: data.referenceNo || "",
-                        originalExternalId: data.externalId || "",
-                        serviceCode: "47",
-                        merchantId: defaults.merchantId,
-                        additionalInfo: {
-                            originalTransactionDate: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
-                            terminalId: defaults.terminalId,
-                        },
-                    }));
-                }
-                try {
-                    const nextBody = { ...body, partnerReferenceNo: Date.now().toString().padStart(20, "0").slice(-20) };
-                    setGenerateBody(pretty(nextBody));
-                } catch {
-                    // keep current generate body
-                }
-            } else {
-                setQueryResult(data);
             }
+
+            const data = await callYokke("query", inquiryBody);
+            setQueryResult(data);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
@@ -274,6 +313,8 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         `RRN / referenceNo: ${lastTxn.referenceNo || "-"}`,
         `X-EXTERNAL-ID: ${lastTxn.externalId || "-"}`,
         `partnerReferenceNo: ${lastTxn.partnerReferenceNo || "-"}`,
+        `originalTransactionDate (WIB): ${lastTxn.originalTransactionDate || "-"}`,
+        `latestTransactionStatus: ${latestStatus || "-"} ${latestStatusDesc}`.trim(),
         "",
         "=== Generate Request Payload ===",
         generateRequestText || "-",
@@ -374,9 +415,35 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                         {resultCode ? ` · ${resultCode}` : ""}
                                     </p>
                                 ) : null}
+                                {latestStatus ? (
+                                    <p className="mt-1 font-mono text-[11px] text-slate-400">
+                                        status {latestStatus}
+                                        {latestStatusDesc ? ` · ${latestStatusDesc}` : ""}
+                                        {latestStatus === "00"
+                                            ? " (paid)"
+                                            : latestStatus === "01" || latestStatus === "03"
+                                              ? " (pending / unpaid)"
+                                              : ""}
+                                    </p>
+                                ) : null}
                             </div>
                         </div>
                         <p className="mt-3 text-xs text-slate-400">{active.notes}</p>
+                        {needsUnpaidQr ? (
+                            <p className="mt-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-100">
+                                Yokke query looks up a <strong>payment</strong>, not just a generated QR.
+                                Check Status on a brand-new unpaid QR returns <code>4045101 Transaction Not Found</code>.
+                                Scan the QR in the issuer test app so a payment is created, then Check Status again
+                                for <code>2005100</code> (status 01/03 pending, or 00 if already paid).
+                            </p>
+                        ) : null}
+                        {needsUnpaidQr && resultCode === "4045101" ? (
+                            <p className="mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+                                Last Check Status was 4045101 — Yokke has no payment yet for RRN {lastTxn.referenceNo || "—"}.
+                                Keep this QR on screen, start the payment from the issuer app, then Check Status again.
+                                Do not generate a new QR in between.
+                            </p>
+                        ) : null}
                     </div>
 
                     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
@@ -445,7 +512,7 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                     <JsonField
                                         id="query-body"
                                         label="Check / inquiry request body"
-                                        hint="POST /v2.0/qr/qr-mpm-query — auto-filled after generate"
+                                        hint="POST /v3.0/qr/qr-mpm-query — auto-filled after generate (WIB date)"
                                         value={queryBody}
                                         onChange={setQueryBody}
                                     />
@@ -534,6 +601,18 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                         <dt className="text-slate-500">partnerReferenceNo</dt>
                                         <dd className="break-all text-right font-mono text-slate-200">
                                             {lastTxn.partnerReferenceNo || "—"}
+                                        </dd>
+                                    </div>
+                                    <div className="flex justify-between gap-3">
+                                        <dt className="text-slate-500">tx date (WIB)</dt>
+                                        <dd className="font-mono text-slate-200">
+                                            {lastTxn.originalTransactionDate || "—"}
+                                        </dd>
+                                    </div>
+                                    <div className="flex justify-between gap-3">
+                                        <dt className="text-slate-500">inquiry status</dt>
+                                        <dd className="font-mono text-slate-200">
+                                            {latestStatus ? `${latestStatus}${latestStatusDesc ? ` ${latestStatusDesc}` : ""}` : "—"}
                                         </dd>
                                     </div>
                                     <div className="flex justify-between gap-3">

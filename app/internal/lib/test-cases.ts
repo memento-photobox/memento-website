@@ -1,5 +1,10 @@
 export type TestAction = "generate" | "query";
 
+/** YYYYMMDD in Asia/Jakarta. Do not use toISOString() — UTC is a day behind WIB in the morning. */
+export function wibYyyymmdd(date = new Date()): string {
+    return new Date(date.getTime() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
+}
+
 export type SandboxDefaults = {
     merchantId: string;
     terminalId: string;
@@ -19,6 +24,7 @@ export type TestCasePreset = {
         channelId?: string;
         externalId?: string;
         storePending?: boolean;
+        queryPath?: string;
     };
 };
 
@@ -203,8 +209,8 @@ export const YOKKE_TEST_CASES: YokkeTestCase[] = [
         expectedCode: "2005100",
         expectedMessage: "Successful",
         action: "query",
-        steps: "Generate a QR first (or reuse the last one), then click Check Status. Inquiry uses originalReferenceNo + originalExternalId from generate.",
-        notes: "Pending unpaid QR should still return 2005100 with a pending transaction status.",
+        steps: "Generate a QR, then actually start payment from the issuer app (scan the QR). Click Check Status while the payment exists on Yokke. An unpaid QR that was only generated will return 4045101 — that is Yokke, not a bad payload.",
+        notes: "2005100 means Yokke found a payment record. latestTransactionStatus 00 = paid, 01/03 = pending. Generate-only QRs are not queryable on this sandbox.",
     },
     {
         id: "query-not-found",
@@ -231,8 +237,8 @@ export const YOKKE_TEST_CASES: YokkeTestCase[] = [
         expectedCode: "2005100",
         expectedMessage: "Successful",
         action: "query",
-        steps: "Generate a QR and do not pay it. Click Check Status immediately to capture the pending inquiry.",
-        notes: "Use the last generated reference. Scenario: inquiry before payment.",
+        steps: "1) Click Check Status to generate an unpaid QR if needed. Yokke will answer 4045101 until a payment is started. 2) Scan the QR in the issuer/Livin test app and leave it pending (or let it process). 3) Click Check Status again — that is when 2005100 + status 01/03 can appear.",
+        notes: "Yokke inquiry only sees a transaction after the issuer hits their payment rails. A generate-only QR is not a pending payment yet.",
     },
     {
         id: "query-missing",
@@ -278,10 +284,38 @@ export const YOKKE_TEST_CASES: YokkeTestCase[] = [
     },
 ];
 
+export function isPlaceholderQueryRef(ref: string | undefined): boolean {
+    return !ref || ref === "NONEXISTENT_REF_999999" || ref.startsWith("NONEXISTENT");
+}
+
+export function buildQueryBody(
+    defaults: SandboxDefaults,
+    last?: {
+        referenceNo?: string;
+        externalId?: string;
+        partnerReferenceNo?: string;
+        originalTransactionDate?: string;
+    },
+    fake = false,
+): Record<string, unknown> {
+    const originalTransactionDate = last?.originalTransactionDate || wibYyyymmdd();
+    return {
+        originalReferenceNo: fake ? "NONEXISTENT_REF_999999" : last?.referenceNo || "",
+        originalExternalId: fake ? "000000000000001" : last?.externalId || "",
+        serviceCode: "47",
+        merchantId: defaults.merchantId,
+        additionalInfo: {
+            originalTransactionDate,
+            terminalId: defaults.terminalId,
+        },
+    };
+}
+
 export function buildPreset(tc: YokkeTestCase, defaults: SandboxDefaults, last?: {
     referenceNo?: string;
     externalId?: string;
     partnerReferenceNo?: string;
+    originalTransactionDate?: string;
 }): TestCasePreset {
     const now = Date.now().toString();
     const partnerReferenceNo = `${now.slice(0, 8)}${now.slice(-12)}`.slice(0, 20);
@@ -293,16 +327,7 @@ export function buildPreset(tc: YokkeTestCase, defaults: SandboxDefaults, last?:
         terminalId: defaults.terminalId,
     };
 
-    const queryBody: Record<string, unknown> = {
-        originalReferenceNo: last?.referenceNo || "NONEXISTENT_REF_999999",
-        originalExternalId: last?.externalId || "000000000000000",
-        serviceCode: "47",
-        merchantId: defaults.merchantId,
-        additionalInfo: {
-            originalTransactionDate: new Date().toISOString().slice(0, 10).replace(/-/g, ""),
-            terminalId: defaults.terminalId,
-        },
-    };
+    const queryBody = buildQueryBody(defaults, last);
 
     switch (tc.id) {
         case "gen-invalid-mid":
@@ -313,9 +338,7 @@ export function buildPreset(tc: YokkeTestCase, defaults: SandboxDefaults, last?:
             return { generateBody, options: { storePending: false } };
         case "query-not-found":
         case "query-missing":
-            queryBody.originalReferenceNo = "NONEXISTENT_REF_999999";
-            queryBody.originalExternalId = "000000000000001";
-            return { queryBody, options: {} };
+            return { queryBody: buildQueryBody(defaults, last, true), options: {} };
         case "auth-invalid-token":
             return { generateBody, options: { invalidToken: true, storePending: false } };
         case "auth-invalid-sig":

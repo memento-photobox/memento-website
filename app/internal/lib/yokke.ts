@@ -7,7 +7,8 @@ const PROD_BASE = "https://api.yokke.co.id:7778";
 
 export const TOKEN_PATH = "/qr/v2.0/access-token/b2b";
 export const GENERATE_PATH = "/v2.0/qr/qr-mpm-generate";
-export const QUERY_PATH = "/v2.0/qr/qr-mpm-query";
+/** Align with /memento/pay/qr/qr-mpm-notify — Yokke sandbox inquiry is v3. */
+export const QUERY_PATH = "/v3.0/qr/qr-mpm-query";
 
 export function getYokkeBase() {
     return env.yokkeIsProduction ? PROD_BASE : SANDBOX_BASE;
@@ -144,6 +145,8 @@ export type YokkeCallOptions = {
     channelId?: string;
     externalId?: string;
     storePending?: boolean;
+    /** Override inquiry path. Defaults to QUERY_PATH (v3.0). */
+    queryPath?: string;
 };
 
 export type YokkeCallResult = {

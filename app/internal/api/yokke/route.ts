@@ -41,7 +41,10 @@ export async function POST(request: Request) {
     }
 
     const action = payload.action === "query" ? "query" : "generate";
-    const path = action === "query" ? QUERY_PATH : GENERATE_PATH;
+    const path =
+        action === "query"
+            ? payload.options?.queryPath || QUERY_PATH
+            : GENERATE_PATH;
     const defaults = getSandboxDefaults();
 
     if (!defaults.configured) {
