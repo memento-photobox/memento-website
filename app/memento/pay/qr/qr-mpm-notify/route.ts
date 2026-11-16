@@ -1,9 +1,10 @@
 import { db } from "@/utils/supabase/server";
-import { createHmac, createHash } from "crypto";
+import { createHmac, createHash, createSign } from "crypto";
 import { NextResponse } from "next/server";
 import { env } from "@/app/env";
 import { Memento } from "../../../types";
 import { checkAndSendNoticePrint } from "../../notice-check";
+import { resolveYokkeCredentials, type YokkeEnvMode } from "@/app/internal/lib/yokke";
 
 
 const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
@@ -11,8 +12,8 @@ const PROD_BASE = "https://api.yokke.co.id:7778";
 
 const INQUIRY_PATH = "/v3.0/qr/qr-mpm-query";
 
-function getInquiryUrl() {
-    return env.yokkeIsProduction
+function getInquiryUrl(mode: YokkeEnvMode) {
+    return mode === "prod"
         ? `${PROD_BASE}${INQUIRY_PATH}`
         : `${SANDBOX_BASE}${INQUIRY_PATH}`;
 }
@@ -39,6 +40,7 @@ function buildApiSignature(
     accessToken: string,
     body: object,
     timestamp: string,
+    clientSecret: string,
 ): string {
     const bodyHash = createHash("sha256")
         .update(JSON.stringify(body))
@@ -46,7 +48,7 @@ function buildApiSignature(
         .toLowerCase();
 
     const stringToSign = [method, endpointPath, accessToken, bodyHash, timestamp].join(":");
-    return createHmac("sha512", env.yokkeClientSecret!).update(stringToSign).digest("base64");
+    return createHmac("sha512", clientSecret).update(stringToSign).digest("base64");
 }
 
 // ─── QR Inquiry ───────────────────────────────────────────────────────────────
@@ -56,11 +58,13 @@ function buildApiSignature(
  * Returns the inquiry response or throws on error.
  */
 async function inquireTransaction(
+    mode: YokkeEnvMode,
     accessToken: string,
     originalReferenceNo: string,
     originalExternalId: string,
     originalTransactionDate: string,
 ): Promise<YokkeInquiryResponse> {
+    const creds = resolveYokkeCredentials(mode);
     const timestamp = getTimestamp();
     const externalId = Date.now().toString().padStart(15, "0");
 
@@ -68,16 +72,16 @@ async function inquireTransaction(
         originalReferenceNo,
         originalExternalId,
         serviceCode: "47",
-        merchantId: env.yokkeMerchantId!,
+        merchantId: creds.merchantId,
         additionalInfo: {
             originalTransactionDate,
-            terminalId: env.yokkeTerminalId!,
+            terminalId: creds.terminalId,
         },
     };
 
-    const signature = buildApiSignature("POST", INQUIRY_PATH, accessToken, body, timestamp);
+    const signature = buildApiSignature("POST", INQUIRY_PATH, accessToken, body, timestamp, creds.clientSecret);
 
-    const res = await fetch(getInquiryUrl(), {
+    const res = await fetch(getInquiryUrl(mode), {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -85,8 +89,8 @@ async function inquireTransaction(
             "X-TIMESTAMP": timestamp,
             "X-SIGNATURE": signature,
             "X-EXTERNAL-ID": externalId,
-            "X-PARTNER-ID": env.yokkePartnerId!,
-            "CHANNEL-ID": env.yokkeChannelId ?? "02",
+            "X-PARTNER-ID": creds.partnerId,
+            "CHANNEL-ID": creds.channelId ?? "02",
         },
         body: JSON.stringify(body),
     });
@@ -102,12 +106,10 @@ async function inquireTransaction(
 
 // ─── Access token (re-used from generate route logic) ────────────────────────
 
-import { createSign } from "crypto";
-
-function buildTokenSignature(clientKey: string, timestamp: string): string {
+function buildTokenSignature(clientKey: string, timestamp: string, privateKey: string): string {
     const signer = createSign("SHA256");
     signer.update(`${clientKey}|${timestamp}`);
-    return signer.sign(env.yokkePrivateKey!, "base64");
+    return signer.sign(privateKey, "base64");
 }
 
 const SANDBOX_TOKEN_URL = `${SANDBOX_BASE}/qr/v2.0/access-token/b2b`;
@@ -116,18 +118,19 @@ const PROD_TOKEN_URL = `${PROD_BASE}/qr/v2.0/access-token/b2b`;
 // ─── Token cache (reuse for up to 50 min) ─────────────────────────────────────
 
 const TOKEN_TTL_MS = 50 * 60 * 1000; // 50 minutes
-let cachedToken: { token: string; expiresAt: number } | null = null;
+const cachedTokens: Partial<Record<YokkeEnvMode, { token: string; expiresAt: number }>> = {};
 
-async function getAccessToken(): Promise<string> {
-    // Return cached token if still valid
-    if (cachedToken && Date.now() < cachedToken.expiresAt) {
-        console.log("[yokke] Using cached access token for notify (expires in", Math.round((cachedToken.expiresAt - Date.now()) / 1000), "s)");
-        return cachedToken.token;
+async function getAccessToken(mode: YokkeEnvMode): Promise<string> {
+    const cached = cachedTokens[mode];
+    if (cached && Date.now() < cached.expiresAt) {
+        console.log(`[yokke] Using cached ${mode} access token for notify (expires in`, Math.round((cached.expiresAt - Date.now()) / 1000), "s)");
+        return cached.token;
     }
 
-    const clientKey = env.yokkeClientKey!;
+    const creds = resolveYokkeCredentials(mode);
+    const clientKey = creds.clientKey;
     const timestamp = getTimestamp();
-    const signature = buildTokenSignature(clientKey, timestamp);
+    const signature = buildTokenSignature(clientKey, timestamp, creds.privateKey);
 
     const headers = {
         "Content-Type": "application/json",
@@ -136,10 +139,10 @@ async function getAccessToken(): Promise<string> {
         "X-SIGNATURE": signature,
         "X-PLATFORM": "PORTAL",
     };
-    console.log("[yokke] Access token request headers (notify):", headers);
+    console.log(`[yokke] Access token request headers (notify/${mode}):`, headers);
 
     const res = await fetch(
-        env.yokkeIsProduction ? PROD_TOKEN_URL : SANDBOX_TOKEN_URL,
+        mode === "prod" ? PROD_TOKEN_URL : SANDBOX_TOKEN_URL,
         {
             method: "POST",
             headers,
@@ -147,12 +150,12 @@ async function getAccessToken(): Promise<string> {
         },
     );
 
-    if (!res.ok) throw new Error("Failed to get Yokke access token for inquiry");
+    if (!res.ok) throw new Error(`Failed to get Yokke ${mode} access token for inquiry`);
     const data = await res.json();
 
     // Cache the token
-    cachedToken = { token: data.accessToken as string, expiresAt: Date.now() + TOKEN_TTL_MS };
-    return cachedToken.token;
+    cachedTokens[mode] = { token: data.accessToken as string, expiresAt: Date.now() + TOKEN_TTL_MS };
+    return data.accessToken as string;
 }
 
 // ─── Pending payment lookup ───────────────────────────────────────────────────
@@ -289,10 +292,23 @@ export async function POST(request: Request) {
         // 2. Call inquiry to double-verify with Yokke
         //    QR Inquiry.originalReferenceNo = QR Generate.referenceNo
         //    QR Inquiry.originalExternalId  = QR Generate.X-EXTERNAL-ID
+        const isV2NotifyRoute = request.url.includes("/memento/pay/yokke/v2/notify");
+        const notifyMerchantId = typeof additionalInfoRaw["merchantId"] === "string"
+            ? additionalInfoRaw["merchantId"].padStart(15, "0")
+            : "";
+        const mode: YokkeEnvMode =
+            isV2NotifyRoute ||
+            boothId === "internal-prod" ||
+            (notifyMerchantId && notifyMerchantId === env.yokkeProdMerchantId) ||
+            env.yokkeIsProduction
+                ? "prod"
+                : "sandbox";
+
         const wibNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
         const txDate = wibNow.toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD in WIB
-        const accessToken = await getAccessToken();
+        const accessToken = await getAccessToken(mode);
         const inquiry = await inquireTransaction(
+            mode,
             accessToken,
             originalReferenceNo,
             externalId,

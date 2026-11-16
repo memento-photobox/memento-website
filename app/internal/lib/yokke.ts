@@ -1,16 +1,148 @@
-import { createSign, createHmac, createHash, randomUUID } from "crypto";
+import { createSign, createHmac, createHash, createPublicKey, randomUUID } from "crypto";
 import { env } from "@/app/env";
 import { db } from "@/utils/supabase/server";
 
-const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
-const PROD_BASE = "https://api.yokke.co.id:7778";
+export const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
+export const PROD_BASE = "https://api.yokke.co.id:7778";
 
 export const TOKEN_PATH = "/qr/v2.0/access-token/b2b";
 export const GENERATE_PATH = "/v2.0/qr/qr-mpm-generate";
-/** Align with /memento/pay/qr/qr-mpm-notify — Yokke sandbox inquiry is v3. */
+/** Align with /memento/pay/qr/qr-mpm-notify and /memento/pay/yokke/v2/notify — Yokke inquiry is v3. */
 export const QUERY_PATH = "/v3.0/qr/qr-mpm-query";
 
-export function getYokkeBase() {
+export const SANDBOX_CALLBACK_PATH = "/memento/pay/qr/qr-mpm-notify";
+export const PROD_CALLBACK_PATH = "/memento/pay/yokke/v2/notify";
+
+export type YokkeEnvMode = "sandbox" | "prod";
+
+type ResolvedCredentials = {
+    mode: YokkeEnvMode;
+    isProduction: boolean;
+    baseUrl: string;
+    callbackPath: string;
+    clientKey: string;
+    clientSecret: string;
+    privateKey: string;
+    publicKey: string;
+    partnerId: string;
+    channelId: string;
+    merchantId: string;
+    terminalId: string;
+    merchantName: string;
+};
+
+let runtimeProdPrivateKey = "";
+
+export function setRuntimeProdPrivateKey(pem: string) {
+    const trimmed = pem.trim();
+    if (trimmed && trimmed !== runtimeProdPrivateKey) {
+        runtimeProdPrivateKey = trimmed;
+        delete cachedTokens.prod;
+    }
+}
+
+export function getRuntimeProdPrivateKey(): string {
+    return runtimeProdPrivateKey;
+}
+
+export function normalizePem(raw: string, type: "PRIVATE KEY" | "RSA PRIVATE KEY" | "PUBLIC KEY" = "RSA PRIVATE KEY"): string {
+    const trimmed = raw.trim().replace(/\\n/g, "\n");
+    if (!trimmed) return "";
+    if (trimmed.includes("-----BEGIN")) return trimmed;
+    const clean = trimmed.replace(/\s+/g, "");
+    const lines = clean.match(/.{1,64}/g)?.join("\n") ?? clean;
+    return `-----BEGIN ${type}-----\n${lines}\n-----END ${type}-----`;
+}
+
+export function stripPemHeaders(pem: string): string {
+    return pem
+        .replace(/-----BEGIN [^-]+-----/g, "")
+        .replace(/-----END [^-]+-----/g, "")
+        .replace(/\s+/g, "");
+}
+
+export function verifyKeyPair(privateKeyPem: string, expectedPublicKeyPem: string): {
+    hasPrivateKey: boolean;
+    validPrivateKey: boolean;
+    matchesPublicKey: boolean;
+    derivedPublicKey?: string;
+    error?: string;
+} {
+    if (!privateKeyPem || !privateKeyPem.trim()) {
+        return { hasPrivateKey: false, validPrivateKey: false, matchesPublicKey: false };
+    }
+    try {
+        const normalizedPriv = normalizePem(privateKeyPem, "RSA PRIVATE KEY");
+        const pubObj = createPublicKey(normalizedPriv);
+        const spkiPem = pubObj.export({ type: "spki", format: "pem" }).toString();
+        const derivedB64 = stripPemHeaders(spkiPem);
+        const expectedB64 = stripPemHeaders(expectedPublicKeyPem);
+        return {
+            hasPrivateKey: true,
+            validPrivateKey: true,
+            matchesPublicKey: Boolean(expectedB64 && derivedB64 === expectedB64),
+            derivedPublicKey: derivedB64,
+        };
+    } catch (err) {
+        return {
+            hasPrivateKey: true,
+            validPrivateKey: false,
+            matchesPublicKey: false,
+            error: err instanceof Error ? err.message : String(err),
+        };
+    }
+}
+
+export function resolveYokkeCredentials(
+    mode: YokkeEnvMode = env.yokkeIsProduction ? "prod" : "sandbox",
+    privateKeyOverride?: string,
+): ResolvedCredentials {
+    if (mode === "prod") {
+        if (privateKeyOverride?.trim()) {
+            setRuntimeProdPrivateKey(privateKeyOverride);
+        }
+        const rawPriv =
+            privateKeyOverride?.trim() ||
+            runtimeProdPrivateKey ||
+            env.yokkeProdPrivateKey ||
+            env.yokkePrivateKey ||
+            "";
+        return {
+            mode: "prod",
+            isProduction: true,
+            baseUrl: PROD_BASE,
+            callbackPath: PROD_CALLBACK_PATH,
+            clientKey: env.yokkeProdClientKey || "",
+            clientSecret: env.yokkeProdClientSecret || "",
+            privateKey: normalizePem(rawPriv, "RSA PRIVATE KEY"),
+            publicKey: normalizePem(env.yokkeProdPublicKey || "", "PUBLIC KEY"),
+            partnerId: env.yokkeProdPartnerId || "MEMENTOMPMSNAP",
+            channelId: env.yokkeProdChannelId || "02",
+            merchantId: env.yokkeProdMerchantId || "000071028859200",
+            terminalId: env.yokkeProdTerminalId || "86847056",
+            merchantName: env.yokkeProdMerchantName || "PTR API QRIS 3 DJAKARTA",
+        };
+    }
+
+    return {
+        mode: "sandbox",
+        isProduction: false,
+        baseUrl: SANDBOX_BASE,
+        callbackPath: SANDBOX_CALLBACK_PATH,
+        clientKey: env.yokkeClientKey || "",
+        clientSecret: env.yokkeClientSecret || "",
+        privateKey: normalizePem(privateKeyOverride?.trim() || env.yokkePrivateKey || "", "RSA PRIVATE KEY"),
+        publicKey: "",
+        partnerId: env.yokkePartnerId || "MEMENTOMPMSNAP",
+        channelId: env.yokkeChannelId || "02",
+        merchantId: env.yokkeMerchantId || "",
+        terminalId: env.yokkeTerminalId || "",
+        merchantName: "Yokke Sandbox",
+    };
+}
+
+export function getYokkeBase(mode?: YokkeEnvMode) {
+    if (mode) return mode === "prod" ? PROD_BASE : SANDBOX_BASE;
     return env.yokkeIsProduction ? PROD_BASE : SANDBOX_BASE;
 }
 
@@ -53,10 +185,10 @@ export function todayYyyymmdd(): string {
     return wib.toISOString().slice(0, 10).replace(/-/g, "");
 }
 
-function buildTokenSignature(clientKey: string, timestamp: string): string {
+function buildTokenSignature(clientKey: string, timestamp: string, privateKey: string): string {
     const signer = createSign("SHA256");
     signer.update(`${clientKey}|${timestamp}`);
-    return signer.sign(env.yokkePrivateKey!, "base64");
+    return signer.sign(privateKey, "base64");
 }
 
 function buildApiSignature(
@@ -65,46 +197,53 @@ function buildApiSignature(
     accessToken: string,
     body: object,
     timestamp: string,
+    clientSecret: string,
 ): string {
     const bodyHash = createHash("sha256")
         .update(JSON.stringify(body))
         .digest("hex")
         .toLowerCase();
     const stringToSign = [method, endpointPath, accessToken, bodyHash, timestamp].join(":");
-    return createHmac("sha512", env.yokkeClientSecret!).update(stringToSign).digest("base64");
+    return createHmac("sha512", clientSecret).update(stringToSign).digest("base64");
 }
 
 const TOKEN_TTL_MS = 50 * 60 * 1000;
-let cachedToken: { token: string; expiresAt: number } | null = null;
+const cachedTokens: Partial<Record<YokkeEnvMode, { token: string; expiresAt: number; keyFinger: string }>> = {};
 
-export async function getAccessToken(): Promise<{
+export async function getAccessToken(
+    mode: YokkeEnvMode = env.yokkeIsProduction ? "prod" : "sandbox",
+    privateKeyOverride?: string,
+): Promise<{
     token: string;
     request: YokkeRequestSnapshot;
     response: unknown;
     httpStatus: number;
 }> {
-    if (cachedToken && Date.now() < cachedToken.expiresAt) {
+    const creds = resolveYokkeCredentials(mode, privateKeyOverride);
+    const keyFinger = creds.privateKey.slice(-32);
+    const cached = cachedTokens[mode];
+
+    if (cached && Date.now() < cached.expiresAt && cached.keyFinger === keyFinger) {
         return {
-            token: cachedToken.token,
+            token: cached.token,
             request: {
                 method: "POST",
-                url: `${getYokkeBase()}${TOKEN_PATH}`,
+                url: `${creds.baseUrl}${TOKEN_PATH}`,
                 path: TOKEN_PATH,
-                headers: { cached: "true" },
+                headers: { cached: "true", environment: mode },
                 body: { grantType: "client_credentials" },
             },
-            response: { accessToken: `${cachedToken.token.slice(0, 20)}...[CACHED]` },
+            response: { accessToken: `${cached.token.slice(0, 20)}...[CACHED]` },
             httpStatus: 200,
         };
     }
 
-    const clientKey = env.yokkeClientKey!;
     const timestamp = getTimestamp();
-    const signature = buildTokenSignature(clientKey, timestamp);
-    const url = `${getYokkeBase()}${TOKEN_PATH}`;
+    const signature = buildTokenSignature(creds.clientKey, timestamp, creds.privateKey);
+    const url = `${creds.baseUrl}${TOKEN_PATH}`;
     const headers = {
         "Content-Type": "application/json",
-        "X-CLIENT-KEY": clientKey,
+        "X-CLIENT-KEY": creds.clientKey,
         "X-TIMESTAMP": timestamp,
         "X-SIGNATURE": signature,
         "X-PLATFORM": "PORTAL",
@@ -119,7 +258,11 @@ export async function getAccessToken(): Promise<{
     const response = await res.json().catch(() => ({}));
 
     if (res.ok && response.accessToken) {
-        cachedToken = { token: response.accessToken as string, expiresAt: Date.now() + TOKEN_TTL_MS };
+        cachedTokens[mode] = {
+            token: response.accessToken as string,
+            expiresAt: Date.now() + TOKEN_TTL_MS,
+            keyFinger,
+        };
     }
 
     return {
@@ -139,6 +282,8 @@ export type YokkeRequestSnapshot = {
 };
 
 export type YokkeCallOptions = {
+    mode?: YokkeEnvMode;
+    privateKeyOverride?: string;
     invalidToken?: boolean;
     invalidSignature?: boolean;
     omitChannelId?: boolean;
@@ -150,6 +295,13 @@ export type YokkeCallOptions = {
 };
 
 export type YokkeCallResult = {
+    mode: YokkeEnvMode;
+    callbackPath: string;
+    tokenExchange?: {
+        request: YokkeRequestSnapshot;
+        response: unknown;
+        httpStatus: number;
+    };
     request: YokkeRequestSnapshot;
     response: Record<string, unknown>;
     httpStatus: number;
@@ -165,17 +317,29 @@ export async function callYokkeApi(
     body: object,
     options: YokkeCallOptions = {},
 ): Promise<YokkeCallResult> {
-    if (!env.yokkeClientKey || !env.yokkePrivateKey || !env.yokkeClientSecret || !env.yokkePartnerId) {
-        throw new Error("Missing required Yokke environment variables");
+    const mode: YokkeEnvMode = options.mode ?? (env.yokkeIsProduction ? "prod" : "sandbox");
+    const creds = resolveYokkeCredentials(mode, options.privateKeyOverride);
+
+    if (!creds.clientKey || !creds.privateKey || !creds.clientSecret || !creds.partnerId) {
+        throw new Error(`Missing required Yokke ${mode.toUpperCase()} credentials (check Private Key / .env)`);
     }
 
     let accessToken = "";
+    let tokenExchange: YokkeCallResult["tokenExchange"] | undefined;
     if (options.invalidToken) {
         accessToken = "INVALID_ACCESS_TOKEN_FOR_TESTING";
     } else {
-        const tokenResult = await getAccessToken();
+        const tokenResult = await getAccessToken(mode, options.privateKeyOverride);
+        tokenExchange = {
+            request: tokenResult.request,
+            response: tokenResult.response,
+            httpStatus: tokenResult.httpStatus,
+        };
         if (!tokenResult.token) {
             return {
+                mode,
+                callbackPath: creds.callbackPath,
+                tokenExchange,
                 request: tokenResult.request,
                 response: tokenResult.response as Record<string, unknown>,
                 httpStatus: tokenResult.httpStatus,
@@ -187,13 +351,13 @@ export async function callYokkeApi(
 
     const timestamp = getTimestamp();
     const externalId = options.externalId || generateExternalId();
-    const channelId = options.channelId ?? env.yokkeChannelId ?? "02";
+    const channelId = options.channelId ?? creds.channelId ?? "02";
 
     let signature = "";
     if (options.invalidSignature) {
         signature = "INVALID_SIGNATURE_FOR_TESTING_aAbBcCdDeEfFgGhH==";
     } else {
-        signature = buildApiSignature("POST", path, accessToken, body, timestamp);
+        signature = buildApiSignature("POST", path, accessToken, body, timestamp, creds.clientSecret);
     }
 
     const headers: Record<string, string> = {
@@ -202,14 +366,14 @@ export async function callYokkeApi(
         "X-TIMESTAMP": timestamp,
         "X-SIGNATURE": signature,
         "X-EXTERNAL-ID": externalId,
-        "X-PARTNER-ID": env.yokkePartnerId,
+        "X-PARTNER-ID": creds.partnerId,
     };
 
     if (!options.omitChannelId) {
         headers["CHANNEL-ID"] = channelId;
     }
 
-    const url = `${getYokkeBase()}${path}`;
+    const url = `${creds.baseUrl}${path}`;
     const request: YokkeRequestSnapshot = { method: "POST", url, path, headers, body };
 
     let httpStatus = 0;
@@ -233,6 +397,9 @@ export async function callYokkeApi(
     }
 
     const result: YokkeCallResult = {
+        mode,
+        callbackPath: creds.callbackPath,
+        tokenExchange,
         request,
         response,
         httpStatus,
@@ -254,7 +421,13 @@ export async function callYokkeApi(
             result.partnerReferenceNo ??
             (body as { partnerReferenceNo?: string }).partnerReferenceNo ??
             generatePartnerRef();
-        await storePendingPayment(partnerRef, result.referenceNo ?? null, externalId, uuid);
+        await storePendingPayment(
+            partnerRef,
+            result.referenceNo ?? null,
+            externalId,
+            uuid,
+            mode === "prod" ? "internal-prod" : "internal-sandbox",
+        );
     }
 
     return result;
@@ -265,6 +438,7 @@ async function storePendingPayment(
     yokkeReferenceNo: string | null,
     externalId: string,
     uuid: string,
+    boothId: string,
 ): Promise<void> {
     try {
         const supabase = await db();
@@ -272,7 +446,7 @@ async function storePendingPayment(
             partner_reference_no: partnerReferenceNo,
             yokke_reference_no: yokkeReferenceNo,
             external_id: externalId,
-            booth_id: "internal-sandbox",
+            booth_id: boothId,
             uuid,
         });
         if (error) {
@@ -283,20 +457,57 @@ async function storePendingPayment(
     }
 }
 
-export function getSandboxDefaults() {
+export function getEnvConfig(mode: YokkeEnvMode, privateKeyOverride?: string) {
+    const creds = resolveYokkeCredentials(mode, privateKeyOverride);
+    const keyCheck =
+        mode === "prod"
+            ? verifyKeyPair(
+                  privateKeyOverride?.trim() || runtimeProdPrivateKey || env.yokkeProdPrivateKey || "",
+                  creds.publicKey,
+              )
+            : { hasPrivateKey: Boolean(creds.privateKey), validPrivateKey: Boolean(creds.privateKey), matchesPublicKey: true };
+
+    const fallbackCheck =
+        mode === "prod" && !keyCheck.hasPrivateKey && creds.privateKey
+            ? verifyKeyPair(creds.privateKey, creds.publicKey)
+            : keyCheck;
+
     return {
-        merchantId: env.yokkeMerchantId ?? "",
-        terminalId: env.yokkeTerminalId ?? "",
-        partnerId: env.yokkePartnerId ?? "",
-        channelId: env.yokkeChannelId ?? "02",
-        isProduction: env.yokkeIsProduction,
+        mode,
+        merchantName: creds.merchantName,
+        merchantId: creds.merchantId,
+        rawMerchantId: creds.merchantId.replace(/^0+/, ""),
+        terminalId: creds.terminalId,
+        partnerId: creds.partnerId,
+        channelId: creds.channelId,
+        clientKey: creds.clientKey,
+        clientSecretPreview: creds.clientSecret ? `${creds.clientSecret.slice(0, 8)}...${creds.clientSecret.slice(-4)}` : "",
+        publicKeyBase64: stripPemHeaders(creds.publicKey),
+        baseUrl: creds.baseUrl,
+        callbackPath: creds.callbackPath,
+        isProduction: creds.isProduction,
+        defaultAmount: creds.isProduction ? "1.00" : "10000.00",
+        hasDedicatedProdPrivateKey: mode === "prod" ? Boolean(runtimeProdPrivateKey || env.yokkeProdPrivateKey) : true,
+        privateKeyMatchesPublicKey: fallbackCheck.matchesPublicKey,
         configured: Boolean(
-            env.yokkeClientKey &&
-                env.yokkePrivateKey &&
-                env.yokkeClientSecret &&
-                env.yokkePartnerId &&
-                env.yokkeMerchantId &&
-                env.yokkeTerminalId,
+            creds.clientKey &&
+                creds.privateKey &&
+                creds.clientSecret &&
+                creds.partnerId &&
+                creds.merchantId &&
+                creds.terminalId,
         ),
+    };
+}
+
+export function getSandboxDefaults(mode: YokkeEnvMode = env.yokkeIsProduction ? "prod" : "sandbox") {
+    return getEnvConfig(mode);
+}
+
+export function getAllEnvDefaults() {
+    return {
+        defaultMode: (env.yokkeIsProduction ? "prod" : "sandbox") as YokkeEnvMode,
+        sandbox: getEnvConfig("sandbox"),
+        prod: getEnvConfig("prod"),
     };
 }

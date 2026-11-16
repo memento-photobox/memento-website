@@ -8,13 +8,28 @@ import {
     isPlaceholderQueryRef,
     matchExpected,
     wibYyyymmdd,
+    type AllEnvDefaults,
     type SandboxDefaults,
     type YokkeTestCase,
 } from "../lib/test-cases";
 
 type ApiResult = {
     action: "generate" | "query";
+    mode?: "sandbox" | "prod";
+    callbackPath?: string;
+    envConfig?: SandboxDefaults;
     path: string;
+    tokenExchange?: {
+        request: {
+            method: string;
+            url: string;
+            path: string;
+            headers: Record<string, string>;
+            body: unknown;
+        };
+        response: unknown;
+        httpStatus: number;
+    };
     request: {
         method: string;
         url: string;
@@ -53,6 +68,21 @@ function pretty(value: unknown) {
         }
     }
     return JSON.stringify(value, null, 2);
+}
+
+function formatWagShare(result: ApiResult | null): string {
+    if (!result) return "";
+    return [
+        `Post' URL ${result.request.url}`,
+        "RequestHeader:",
+        pretty(result.request.headers),
+        "",
+        "RequestBody:",
+        pretty(result.request.body),
+        "",
+        "ResponseBody:",
+        pretty(result.response),
+    ].join("\n");
 }
 
 function typeBadge(type: YokkeTestCase["type"]) {
@@ -126,18 +156,29 @@ function JsonField({
     );
 }
 
-export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }) {
+export default function YokkeSandbox({ envDefaults }: { envDefaults: AllEnvDefaults }) {
+    const [mode, setMode] = useState<"sandbox" | "prod">(envDefaults.defaultMode);
+    const [configs, setConfigs] = useState<{ sandbox: SandboxDefaults; prod: SandboxDefaults }>({
+        sandbox: envDefaults.sandbox,
+        prod: envDefaults.prod,
+    });
+    const defaults = configs[mode];
+
     const [activeId, setActiveId] = useState(YOKKE_TEST_CASES[0].id);
     const active = YOKKE_TEST_CASES.find((tc) => tc.id === activeId) ?? YOKKE_TEST_CASES[0];
 
     const [generateBody, setGenerateBody] = useState(() =>
-        pretty(buildPreset(YOKKE_TEST_CASES[0], defaults).generateBody),
+        pretty(buildPreset(YOKKE_TEST_CASES[0], envDefaults[envDefaults.defaultMode]).generateBody),
     );
-    const [queryBody, setQueryBody] = useState(() => pretty(buildQueryBody(defaults)));
+    const [queryBody, setQueryBody] = useState(() =>
+        pretty(buildQueryBody(envDefaults[envDefaults.defaultMode])),
+    );
     const [invalidToken, setInvalidToken] = useState(false);
     const [invalidSignature, setInvalidSignature] = useState(false);
     const [omitChannelId, setOmitChannelId] = useState(false);
     const [storePending, setStorePending] = useState(true);
+    const [privateKeyOverride, setPrivateKeyOverride] = useState("");
+    const [showProdDetails, setShowProdDetails] = useState(true);
 
     const [busy, setBusy] = useState<"generate" | "query" | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -146,9 +187,10 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
     const [queryResult, setQueryResult] = useState<ApiResult | null>(null);
 
     const currentResult = active.action === "query" ? queryResult : generateResult;
-    const resultCode = typeof currentResult?.response?.responseCode === "string"
-        ? currentResult.response.responseCode
-        : "";
+    const resultCode =
+        typeof currentResult?.response?.responseCode === "string"
+            ? currentResult.response.responseCode
+            : "";
     const latestStatus =
         typeof queryResult?.response?.latestTransactionStatus === "string"
             ? queryResult.response.latestTransactionStatus
@@ -171,6 +213,25 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         })).filter((g) => g.items.length > 0);
     }, []);
 
+    function switchEnvironment(nextMode: "sandbox" | "prod") {
+        if (nextMode === mode) return;
+        const nextDefaults = configs[nextMode];
+        setMode(nextMode);
+        setError(null);
+        setLastTxn({});
+        setGenerateResult(null);
+        setQueryResult(null);
+
+        const preset = buildPreset(active, nextDefaults);
+        if (preset.generateBody) {
+            setGenerateBody(pretty(preset.generateBody));
+        } else {
+            const fallbackGen = buildPreset(YOKKE_TEST_CASES[0], nextDefaults).generateBody;
+            if (fallbackGen) setGenerateBody(pretty(fallbackGen));
+        }
+        setQueryBody(pretty(preset.queryBody ?? buildQueryBody(nextDefaults)));
+    }
+
     function applyTestCase(tc: YokkeTestCase) {
         setActiveId(tc.id);
         setError(null);
@@ -181,6 +242,23 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         setInvalidSignature(Boolean(preset.options?.invalidSignature));
         setOmitChannelId(Boolean(preset.options?.omitChannelId));
         setStorePending(preset.options?.storePending !== false && tc.action === "generate");
+    }
+
+    function setQuickAmount(amountValue: string) {
+        try {
+            const parsed = parseBody(generateBody);
+            const nextBody = {
+                ...parsed,
+                amount: {
+                    ...((parsed.amount as Record<string, unknown>) ?? { currency: "IDR" }),
+                    value: amountValue,
+                    currency: "IDR",
+                },
+            };
+            setGenerateBody(pretty(nextBody));
+        } catch {
+            // ignore invalid JSON while editing
+        }
     }
 
     function parseBody(raw: string): Record<string, unknown> {
@@ -210,8 +288,11 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 action,
+                mode,
                 body: omitEmpty(body),
                 options: {
+                    mode,
+                    privateKeyOverride: privateKeyOverride.trim() || undefined,
                     invalidToken,
                     invalidSignature,
                     omitChannelId,
@@ -222,6 +303,9 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         const data = (await res.json()) as ApiResult & { success?: boolean; error?: string };
         if (!res.ok || data.success === false) {
             throw new Error(data.error || `Request failed (${res.status})`);
+        }
+        if (data.envConfig) {
+            setConfigs((prev) => ({ ...prev, [mode]: data.envConfig! }));
         }
         return data;
     }
@@ -239,7 +323,10 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         setLastTxn(nextTxn);
         setQueryBody(pretty(buildQueryBody(defaults, nextTxn)));
         try {
-            const nextBody = { ...body, partnerReferenceNo: Date.now().toString().padStart(20, "0").slice(-20) };
+            const nextBody = {
+                ...body,
+                partnerReferenceNo: Date.now().toString().padStart(20, "0").slice(-20),
+            };
             setGenerateBody(pretty(nextBody));
         } catch {
             // keep current generate body
@@ -288,23 +375,40 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
         }
     }
 
-    const generateRequestText = generateResult ? pretty({
-        method: generateResult.request.method,
-        url: generateResult.request.url,
-        headers: generateResult.request.headers,
-    }) : "";
+    const generateRequestText = generateResult
+        ? pretty({
+              method: generateResult.request.method,
+              url: generateResult.request.url,
+              headers: generateResult.request.headers,
+          })
+        : "";
     const generateBodyText = generateResult ? pretty(generateResult.request.body) : "";
     const generateResponseText = generateResult ? pretty(generateResult.response) : "";
 
-    const queryRequestText = queryResult ? pretty({
-        method: queryResult.request.method,
-        url: queryResult.request.url,
-        headers: queryResult.request.headers,
-    }) : "";
+    const queryRequestText = queryResult
+        ? pretty({
+              method: queryResult.request.method,
+              url: queryResult.request.url,
+              headers: queryResult.request.headers,
+          })
+        : "";
     const queryBodyText = queryResult ? pretty(queryResult.request.body) : "";
     const queryResponseText = queryResult ? pretty(queryResult.response) : "";
 
+    const wagGenerateText = formatWagShare(generateResult);
+    const wagQueryText = formatWagShare(queryResult);
+    const wagCombinedText = [
+        `TC #${active.no} - ${active.scenario} (${mode === "prod" ? "PTR / PROD" : "SANDBOX"})`,
+        wagGenerateText ? `\n[QR Generate]\n${wagGenerateText}` : "",
+        wagQueryText ? `\n[QR Inquiry / Check Status]\n${wagQueryText}` : "",
+    ]
+        .filter(Boolean)
+        .join("\n");
+
     const formPack = [
+        `Environment: ${mode === "prod" ? "Production (PTR)" : "Sandbox"}`,
+        `Base URL: ${defaults.baseUrl}`,
+        `Callback URL: ${defaults.callbackPath}`,
         `No: ${active.no}`,
         `Service: ${active.service}`,
         `Scenario: ${active.scenario}`,
@@ -340,19 +444,78 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
             <div className="mx-auto flex max-w-[1600px] flex-col gap-5 px-4 py-6 lg:flex-row lg:px-6">
                 <aside className="w-full shrink-0 lg:w-80">
                     <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-4 lg:sticky lg:top-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-indigo-400">Internal sandbox</p>
+                        <div className="flex items-center justify-between gap-2">
+                            <p className="text-[10px] uppercase tracking-[0.2em] text-indigo-400">
+                                Internal Yokke Tester
+                            </p>
+                            <span
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                                    mode === "prod"
+                                        ? "border-amber-500/50 bg-amber-500/15 text-amber-300"
+                                        : "border-indigo-500/50 bg-indigo-500/15 text-indigo-300"
+                                }`}
+                            >
+                                {mode === "prod" ? "PROD / PTR" : "SANDBOX"}
+                            </span>
+                        </div>
                         <h1 className="mt-1 text-xl font-semibold">Yokke QR Test Cases</h1>
-                        <p className="mt-2 text-xs text-slate-400">
-                            {defaults.isProduction ? "Production" : "Yokke sandbox"} · MID {defaults.merchantId || "—"} · TID{" "}
-                            {defaults.terminalId || "—"}
-                        </p>
+
+                        {/* Environment Switcher */}
+                        <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-2xl border border-slate-800 bg-slate-950 p-1">
+                            <button
+                                type="button"
+                                onClick={() => switchEnvironment("sandbox")}
+                                className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                                    mode === "sandbox"
+                                        ? "bg-indigo-500 text-white shadow"
+                                        : "text-slate-400 hover:text-slate-200"
+                                }`}
+                            >
+                                Sandbox (UAT)
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => switchEnvironment("prod")}
+                                className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                                    mode === "prod"
+                                        ? "bg-amber-500 text-slate-950 shadow"
+                                        : "text-slate-400 hover:text-slate-200"
+                                }`}
+                            >
+                                Prod (PTR)
+                            </button>
+                        </div>
+
+                        <div className="mt-3 space-y-1 rounded-2xl border border-slate-800/80 bg-slate-950/60 p-3 text-[11px] text-slate-300">
+                            <div className="flex justify-between gap-2">
+                                <span className="text-slate-500">Merchant</span>
+                                <span className="font-medium text-slate-200">{defaults.merchantName}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                                <span className="text-slate-500">API Host</span>
+                                <span className="font-mono text-slate-200">{defaults.baseUrl.replace("https://", "")}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                                <span className="text-slate-500">MID (15d)</span>
+                                <span className="font-mono text-slate-200">{defaults.merchantId || "—"}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                                <span className="text-slate-500">TID</span>
+                                <span className="font-mono text-slate-200">{defaults.terminalId || "—"}</span>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                                <span className="text-slate-500">Callback</span>
+                                <span className="font-mono text-emerald-300">{defaults.callbackPath}</span>
+                            </div>
+                        </div>
+
                         {!defaults.configured ? (
                             <p className="mt-3 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                                Yokke env vars are incomplete. Generate/Check will fail until they are set.
+                                Yokke {mode.toUpperCase()} env vars are incomplete. Generate/Check will fail until they are set.
                             </p>
                         ) : null}
 
-                        <div className="mt-4 max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+                        <div className="mt-4 max-h-[62vh] space-y-4 overflow-y-auto pr-1">
                             {grouped.map(({ group, items }) => (
                                 <div key={group}>
                                     <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -394,6 +557,121 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                 </aside>
 
                 <section className="min-w-0 flex-1 space-y-5">
+                    {/* PROD / PTR Context Card (from PROD_AGENT.md) */}
+                    {mode === "prod" ? (
+                        <div className="rounded-3xl border border-amber-500/40 bg-amber-500/10 p-5">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="rounded-full bg-amber-400 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-950">
+                                            PTR Mode (Production Trial Run)
+                                        </span>
+                                        <span className="font-mono text-xs text-amber-200">
+                                            {defaults.baseUrl}/
+                                        </span>
+                                    </div>
+                                    <h3 className="mt-1.5 text-lg font-semibold text-amber-100">
+                                        {defaults.merchantName} — MID {defaults.rawMerchantId} (`{defaults.merchantId}`) · TID {defaults.terminalId}
+                                    </h3>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowProdDetails((v) => !v)}
+                                    className="rounded-xl border border-amber-400/40 px-3 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-500/20"
+                                >
+                                    {showProdDetails ? "Hide PTR Info & Keys" : "Show PTR Info & Keys"}
+                                </button>
+                            </div>
+
+                            {showProdDetails ? (
+                                <div className="mt-4 space-y-4">
+                                    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3 text-xs">
+                                            <p className="text-[10px] uppercase tracking-wider text-slate-400">
+                                                X-PARTNER-ID / tokenRequestID
+                                            </p>
+                                            <p className="mt-1 font-mono text-slate-100">{defaults.partnerId}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3 text-xs">
+                                            <p className="text-[10px] uppercase tracking-wider text-slate-400">
+                                                Client ID / X-CLIENT-KEY
+                                            </p>
+                                            <p className="mt-1 break-all font-mono text-slate-100">{defaults.clientKey}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3 text-xs">
+                                            <p className="text-[10px] uppercase tracking-wider text-slate-400">
+                                                Client Secret / Salt Key
+                                            </p>
+                                            <p className="mt-1 font-mono text-slate-100">{defaults.clientSecretPreview}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3 text-xs">
+                                            <p className="text-[10px] uppercase tracking-wider text-slate-400">
+                                                Production Callback URL (v2)
+                                            </p>
+                                            <p className="mt-1 font-mono text-emerald-300">{defaults.callbackPath}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid gap-4 lg:grid-cols-2">
+                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3.5 text-xs text-amber-100/90">
+                                            <p className="font-semibold text-amber-200">
+                                                Ketentuan PTR (PROD_AGENT.md):
+                                            </p>
+                                            <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[11px] leading-relaxed">
+                                                <li>
+                                                    MID/TID PTR (<code>71028859200</code> / <code>86847056</code>) hanya untuk pengujian di environment production, <strong>bukan</strong> untuk transaksi real end-user sebelum Go Live.
+                                                </li>
+                                                <li>
+                                                    Untuk amount pengujian boleh nominal kecil: <strong>Rp 1.00 – Rp 5.00</strong> (default preset di mode PTR sudah diset ke <code>1.00</code>).
+                                                </li>
+                                                <li>
+                                                    Callback notify production menggunakan endpoint terbaru:{" "}
+                                                    <code className="text-emerald-300">POST /memento/pay/yokke/v2/notify</code>.
+                                                </li>
+                                            </ul>
+                                        </div>
+
+                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3.5 text-xs">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <p className="font-semibold text-amber-200">
+                                                    RSA Key Pair Status (B2B Access Token Signature)
+                                                </p>
+                                                <span
+                                                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                                        defaults.privateKeyMatchesPublicKey
+                                                            ? "bg-emerald-500/20 text-emerald-300"
+                                                            : "bg-rose-500/20 text-rose-300"
+                                                    }`}
+                                                >
+                                                    {defaults.privateKeyMatchesPublicKey
+                                                        ? "Private Key Matches Public Key"
+                                                        : "Missing Matching Private Key"}
+                                                </span>
+                                            </div>
+                                            {!defaults.privateKeyMatchesPublicKey ? (
+                                                <p className="mt-1 text-[11px] text-rose-200/90">
+                                                    Public Key PTR yang terdaftar adalah 2048-bit (<code>MIIBIjANBg...x3RwTbribU3...</code>), sedangkan <code>.env</code> saat ini baru berisi Private Key Sandbox. Paste <strong>RSA Private Key</strong> pasangan Public Key tersebut di bawah (atau isi <code>YOKKE_PROD_PRIVATE_KEY</code> di <code>.env</code>):
+                                                </p>
+                                            ) : (
+                                                <p className="mt-1 text-[11px] text-emerald-200/90">
+                                                    RSA Private Key untuk PTR aktif dan cocok dengan Public Key PTR.
+                                                </p>
+                                            )}
+                                            <textarea
+                                                value={privateKeyOverride}
+                                                onChange={(e) => setPrivateKeyOverride(e.target.value)}
+                                                rows={3}
+                                                placeholder="-----BEGIN RSA PRIVATE KEY----- (opsional: paste Private Key Prod/PTR di sini jika belum ada di .env)"
+                                                spellCheck={false}
+                                                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-1.5 font-mono text-[11px] text-slate-100 outline-none focus:border-amber-400"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+
                     <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
@@ -433,7 +711,7 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                             <p className="mt-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-100">
                                 Yokke query looks up a <strong>payment</strong>, not just a generated QR.
                                 Check Status on a brand-new unpaid QR returns <code>4045101 Transaction Not Found</code>.
-                                Scan the QR in the issuer test app so a payment is created, then Check Status again
+                                Scan the QR in the issuer/partner app so a payment is created, then Check Status again
                                 for <code>2005100</code> (status 01/03 pending, or 00 if already paid).
                             </p>
                         ) : null}
@@ -453,17 +731,41 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                     <div>
                                         <h3 className="text-lg font-semibold">Request editor</h3>
                                         <p className="text-xs text-slate-400">
-                                            Edit JSON, then run Generate or Check. Selecting a test case prefills the payload.
+                                            Target: <code className="text-slate-200">{defaults.baseUrl}</code> · Callback:{" "}
+                                            <code className="text-emerald-300">{defaults.callbackPath}</code>
                                         </p>
                                     </div>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        {mode === "prod" ? (
+                                            <div className="flex items-center gap-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs">
+                                                <span className="px-1 text-[11px] text-amber-200">PTR Nominal:</span>
+                                                {(["1.00", "2.00", "5.00"] as const).map((amt) => (
+                                                    <button
+                                                        key={amt}
+                                                        type="button"
+                                                        onClick={() => setQuickAmount(amt)}
+                                                        className="rounded-lg border border-amber-400/40 bg-slate-950 px-2 py-0.5 font-mono text-[11px] text-amber-200 hover:bg-amber-500/20"
+                                                    >
+                                                        Rp {amt}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        ) : null}
                                         <button
                                             type="button"
                                             onClick={() => run("generate")}
                                             disabled={busy !== null}
-                                            className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:opacity-50"
+                                            className={`rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-50 ${
+                                                mode === "prod"
+                                                    ? "bg-amber-500 text-slate-950 hover:bg-amber-400"
+                                                    : "bg-indigo-500 text-white hover:bg-indigo-400"
+                                            }`}
                                         >
-                                            {busy === "generate" ? "Generating…" : "Generate QR"}
+                                            {busy === "generate"
+                                                ? "Generating…"
+                                                : mode === "prod"
+                                                  ? "Generate QR (PTR)"
+                                                  : "Generate QR"}
                                         </button>
                                         <button
                                             type="button"
@@ -497,7 +799,7 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                     </label>
                                     <label className="flex items-center gap-2">
                                         <input type="checkbox" checked={storePending} onChange={(e) => setStorePending(e.target.checked)} />
-                                        Store pending payment (so notify can match)
+                                        Store pending payment (so {defaults.callbackPath} can match)
                                     </label>
                                 </div>
 
@@ -505,16 +807,47 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                     <JsonField
                                         id="generate-body"
                                         label="Generate request body"
-                                        hint="POST /v2.0/qr/qr-mpm-generate"
+                                        hint={`POST ${defaults.baseUrl}/v2.0/qr/qr-mpm-generate`}
                                         value={generateBody}
                                         onChange={setGenerateBody}
                                     />
                                     <JsonField
                                         id="query-body"
                                         label="Check / inquiry request body"
-                                        hint="POST /v3.0/qr/qr-mpm-query — auto-filled after generate (WIB date)"
+                                        hint={`POST ${defaults.baseUrl}/v3.0/qr/qr-mpm-query — auto-filled after generate (WIB date)`}
                                         value={queryBody}
                                         onChange={setQueryBody}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* WAG Share Format (from PROD_AGENT.md) */}
+                            <div className="rounded-3xl border border-slate-800 bg-slate-900/80 p-5">
+                                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <h3 className="text-lg font-semibold">Format Share WAG (PTR / UAT Log)</h3>
+                                        <p className="text-xs text-slate-400">
+                                            Format sesuai <code>PROD_AGENT.md</code> (<code>Post&apos; URL</code>, <code>RequestHeader</code>, <code>RequestBody</code>, <code>ResponseBody</code>).
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <CopyButton text={wagGenerateText} label="Copy Generate WAG" />
+                                        <CopyButton text={wagQueryText} label="Copy Inquiry WAG" />
+                                        <CopyButton text={wagCombinedText} label="Copy Both for WAG" />
+                                    </div>
+                                </div>
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                    <JsonField
+                                        id="wag-generate"
+                                        label="WAG Format — Generate QR"
+                                        value={wagGenerateText}
+                                        rows={14}
+                                    />
+                                    <JsonField
+                                        id="wag-query"
+                                        label="WAG Format — Check Status / Inquiry"
+                                        value={wagQueryText}
+                                        rows={14}
                                     />
                                 </div>
                             </div>
@@ -590,6 +923,10 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                 <h3 className="text-lg font-semibold">Last transaction</h3>
                                 <dl className="mt-3 space-y-2 text-xs">
                                     <div className="flex justify-between gap-3">
+                                        <dt className="text-slate-500">environment</dt>
+                                        <dd className="font-mono text-slate-200">{mode === "prod" ? "PROD / PTR" : "SANDBOX"}</dd>
+                                    </div>
+                                    <div className="flex justify-between gap-3">
                                         <dt className="text-slate-500">referenceNo / RRN</dt>
                                         <dd className="font-mono text-slate-200">{lastTxn.referenceNo || "—"}</dd>
                                     </div>
@@ -616,12 +953,13 @@ export default function YokkeSandbox({ defaults }: { defaults: SandboxDefaults }
                                         </dd>
                                     </div>
                                     <div className="flex justify-between gap-3">
-                                        <dt className="text-slate-500">sandbox uuid</dt>
+                                        <dt className="text-slate-500">db uuid</dt>
                                         <dd className="break-all text-right font-mono text-slate-200">{lastTxn.uuid || "—"}</dd>
                                     </div>
                                 </dl>
                                 <p className="mt-4 text-xs text-slate-500">
-                                    Payment notify hits <code className="text-slate-300">/memento/pay/qr/qr-mpm-notify</code> and
+                                    Payment notify hits{" "}
+                                    <code className="text-emerald-300">{defaults.callbackPath}</code> and
                                     replies <code className="text-slate-300">2005200 Successful</code> when accepted.
                                 </p>
                             </div>

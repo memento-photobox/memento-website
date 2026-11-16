@@ -24,7 +24,7 @@ export const env = {
     duitkuPrivateKey: process.env.DUITKU_PRIVATE_KEY,
     duitkuBearer: process.env.DUITKU_BEARER,
 
-    // Yokke QRIS MPM
+    // Yokke QRIS MPM (Sandbox / Default)
     yokkeIsProduction: process.env.YOKKE_IS_PRODUCTION === "1",
     yokkeClientKey: process.env.YOKKE_CLIENT_KEY,       // X-CLIENT-KEY (username)
     yokkePrivateKey: process.env.YOKKE_PRIVATE_KEY,     // RSA private key (PEM) for access token signature
@@ -34,4 +34,16 @@ export const env = {
     yokkeMerchantId: (process.env.YOKKE_MERCHANT_ID ?? "").padStart(15, "0"), // merchantId padded to 15 chars
     yokkeTerminalId: process.env.YOKKE_TERMINAL_ID,     // terminalId in request body
 
+    // Yokke QRIS MPM (Production / PTR)
+    yokkeProdClientKey: process.env.YOKKE_PROD_CLIENT_KEY ?? "ab60a20c-19fd-4681-9476-b682fa434da4",
+    yokkeProdClientSecret: process.env.YOKKE_PROD_CLIENT_SECRET ?? "af31821d-eb0a-458b-8a06-4df3f7e4f4fb",
+    yokkeProdPublicKey:
+        process.env.YOKKE_PROD_PUBLIC_KEY ??
+        "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx3RwTbribU3+5aJ4d8qO\n4cvqOpx3U03y4bbZeOLTG46ykZFfXm+2FqXqD5Ii1X8eBafTGS4DmmsUiyYJFIjm\n6OyikBv6zFqdprKriD3/6mgOwrkFJWvAucXje+VGx/3Q/DvrCaizaimPdurn3nW9\niU0GhUO+rFlVxa32bPc1iHZMEnq0fINaxsulB8N+hgmVFRNGAuN6F6lTD5bmmnj+\nxb4W7otlwOHL8SYN3iZvJD9KZrjptLscuTdZkj76ggupgmVx2kPMk6uwYxT1bypA\nS2gfha6hg+OpRxJ/tLHCyh2TV0DGgztappiH9f2OMi5nkIfGpDc6HJj9ZajfFEtb\nDwIDAQAB\n-----END PUBLIC KEY-----",
+    yokkeProdPrivateKey: process.env.YOKKE_PROD_PRIVATE_KEY || "",
+    yokkeProdPartnerId: process.env.YOKKE_PROD_PARTNER_ID ?? "MEMENTOMPMSNAP",
+    yokkeProdChannelId: process.env.YOKKE_PROD_CHANNEL_ID ?? "02",
+    yokkeProdMerchantId: (process.env.YOKKE_PROD_MERCHANT_ID ?? "71028859200").padStart(15, "0"),
+    yokkeProdTerminalId: process.env.YOKKE_PROD_TERMINAL_ID ?? "86847056",
+    yokkeProdMerchantName: process.env.YOKKE_PROD_MERCHANT_NAME ?? "PTR API QRIS 3 DJAKARTA",
 }

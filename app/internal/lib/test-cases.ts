@@ -6,12 +6,29 @@ export function wibYyyymmdd(date = new Date()): string {
 }
 
 export type SandboxDefaults = {
+    mode: "sandbox" | "prod";
+    merchantName: string;
     merchantId: string;
+    rawMerchantId: string;
     terminalId: string;
     partnerId: string;
     channelId: string;
+    clientKey: string;
+    clientSecretPreview: string;
+    publicKeyBase64: string;
+    baseUrl: string;
+    callbackPath: string;
     isProduction: boolean;
+    defaultAmount: string;
+    hasDedicatedProdPrivateKey: boolean;
+    privateKeyMatchesPublicKey: boolean;
     configured: boolean;
+};
+
+export type AllEnvDefaults = {
+    defaultMode: "sandbox" | "prod";
+    sandbox: SandboxDefaults;
+    prod: SandboxDefaults;
 };
 
 export type TestCasePreset = {
@@ -319,9 +336,10 @@ export function buildPreset(tc: YokkeTestCase, defaults: SandboxDefaults, last?:
 }): TestCasePreset {
     const now = Date.now().toString();
     const partnerReferenceNo = `${now.slice(0, 8)}${now.slice(-12)}`.slice(0, 20);
+    const defaultAmount = defaults.defaultAmount || (defaults.isProduction ? "1.00" : "10000.00");
     const generateBody: Record<string, unknown> = {
         partnerReferenceNo,
-        amount: { value: "10000.00", currency: "IDR" },
+        amount: { value: defaultAmount, currency: "IDR" },
         feeAmount: { value: "0.00", currency: "IDR" },
         merchantId: defaults.merchantId,
         terminalId: defaults.terminalId,

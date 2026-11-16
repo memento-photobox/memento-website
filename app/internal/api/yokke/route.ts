@@ -5,16 +5,24 @@ import {
     callYokkeApi,
     generateExternalId,
     generatePartnerRef,
-    getSandboxDefaults,
+    getAllEnvDefaults,
+    getEnvConfig,
     getTimestamp,
     todayYyyymmdd,
     type YokkeCallOptions,
+    type YokkeEnvMode,
 } from "../../lib/yokke";
 
-export async function GET() {
+export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+    const modeParam = searchParams.get("mode");
+    const envDefaults = getAllEnvDefaults();
+    const mode: YokkeEnvMode = modeParam === "prod" || modeParam === "sandbox" ? modeParam : envDefaults.defaultMode;
+
     return NextResponse.json({
         success: true,
-        defaults: getSandboxDefaults(),
+        defaults: getEnvConfig(mode),
+        envDefaults,
         helpers: {
             timestamp: getTimestamp(),
             externalId: generateExternalId(),
@@ -28,6 +36,7 @@ export async function GET() {
 
 type YokkeActionBody = {
     action?: "generate" | "query";
+    mode?: YokkeEnvMode;
     body?: Record<string, unknown>;
     options?: YokkeCallOptions;
 };
@@ -45,11 +54,21 @@ export async function POST(request: Request) {
         action === "query"
             ? payload.options?.queryPath || QUERY_PATH
             : GENERATE_PATH;
-    const defaults = getSandboxDefaults();
+    const mode: YokkeEnvMode =
+        payload.mode === "prod" || payload.options?.mode === "prod"
+            ? "prod"
+            : payload.mode === "sandbox" || payload.options?.mode === "sandbox"
+              ? "sandbox"
+              : getAllEnvDefaults().defaultMode;
+
+    const defaults = getEnvConfig(mode, payload.options?.privateKeyOverride);
 
     if (!defaults.configured) {
         return NextResponse.json(
-            { success: false, error: "Yokke credentials are not configured in environment variables" },
+            {
+                success: false,
+                error: `Yokke ${mode.toUpperCase()} credentials are not fully configured (missing Private Key or env vars)`,
+            },
             { status: 500 },
         );
     }
@@ -60,6 +79,7 @@ export async function POST(request: Request) {
     try {
         const result = await callYokkeApi(path, body, {
             ...options,
+            mode,
             storePending: action === "generate" ? options.storePending !== false : false,
         });
 
@@ -67,6 +87,7 @@ export async function POST(request: Request) {
             success: true,
             action,
             path,
+            envConfig: getEnvConfig(mode, options.privateKeyOverride),
             ...result,
         });
     } catch (error) {
