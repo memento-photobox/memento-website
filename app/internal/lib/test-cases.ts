@@ -15,13 +15,10 @@ export type SandboxDefaults = {
     channelId: string;
     clientKey: string;
     clientSecretPreview: string;
-    publicKeyBase64: string;
     baseUrl: string;
     callbackPath: string;
     isProduction: boolean;
     defaultAmount: string;
-    hasDedicatedProdPrivateKey: boolean;
-    privateKeyMatchesPublicKey: boolean;
     configured: boolean;
 };
 

@@ -177,7 +177,6 @@ export default function YokkeSandbox({ envDefaults }: { envDefaults: AllEnvDefau
     const [invalidSignature, setInvalidSignature] = useState(false);
     const [omitChannelId, setOmitChannelId] = useState(false);
     const [storePending, setStorePending] = useState(true);
-    const [privateKeyOverride, setPrivateKeyOverride] = useState("");
     const [showProdDetails, setShowProdDetails] = useState(true);
 
     const [busy, setBusy] = useState<"generate" | "query" | null>(null);
@@ -292,7 +291,6 @@ export default function YokkeSandbox({ envDefaults }: { envDefaults: AllEnvDefau
                 body: omitEmpty(body),
                 options: {
                     mode,
-                    privateKeyOverride: privateKeyOverride.trim() || undefined,
                     invalidToken,
                     invalidSignature,
                     omitChannelId,
@@ -612,60 +610,22 @@ export default function YokkeSandbox({ envDefaults }: { envDefaults: AllEnvDefau
                                         </div>
                                     </div>
 
-                                    <div className="grid gap-4 lg:grid-cols-2">
-                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3.5 text-xs text-amber-100/90">
-                                            <p className="font-semibold text-amber-200">
-                                                Ketentuan PTR (PROD_AGENT.md):
-                                            </p>
-                                            <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[11px] leading-relaxed">
-                                                <li>
-                                                    MID/TID PTR (<code>71028859200</code> / <code>86847056</code>) hanya untuk pengujian di environment production, <strong>bukan</strong> untuk transaksi real end-user sebelum Go Live.
-                                                </li>
-                                                <li>
-                                                    Untuk amount pengujian boleh nominal kecil: <strong>Rp 1.00 – Rp 5.00</strong> (default preset di mode PTR sudah diset ke <code>1.00</code>).
-                                                </li>
-                                                <li>
-                                                    Callback notify production menggunakan endpoint terbaru:{" "}
-                                                    <code className="text-emerald-300">POST /memento/pay/yokke/v2/notify</code>.
-                                                </li>
-                                            </ul>
-                                        </div>
-
-                                        <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3.5 text-xs">
-                                            <div className="flex items-center justify-between gap-2">
-                                                <p className="font-semibold text-amber-200">
-                                                    RSA Key Pair Status (B2B Access Token Signature)
-                                                </p>
-                                                <span
-                                                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                                        defaults.privateKeyMatchesPublicKey
-                                                            ? "bg-emerald-500/20 text-emerald-300"
-                                                            : "bg-rose-500/20 text-rose-300"
-                                                    }`}
-                                                >
-                                                    {defaults.privateKeyMatchesPublicKey
-                                                        ? "Private Key Matches Public Key"
-                                                        : "Missing Matching Private Key"}
-                                                </span>
-                                            </div>
-                                            {!defaults.privateKeyMatchesPublicKey ? (
-                                                <p className="mt-1 text-[11px] text-rose-200/90">
-                                                    Public Key PTR yang terdaftar adalah 2048-bit (<code>MIIBIjANBg...x3RwTbribU3...</code>), sedangkan <code>.env</code> saat ini baru berisi Private Key Sandbox. Paste <strong>RSA Private Key</strong> pasangan Public Key tersebut di bawah (atau isi <code>YOKKE_PROD_PRIVATE_KEY</code> di <code>.env</code>):
-                                                </p>
-                                            ) : (
-                                                <p className="mt-1 text-[11px] text-emerald-200/90">
-                                                    RSA Private Key untuk PTR aktif dan cocok dengan Public Key PTR.
-                                                </p>
-                                            )}
-                                            <textarea
-                                                value={privateKeyOverride}
-                                                onChange={(e) => setPrivateKeyOverride(e.target.value)}
-                                                rows={3}
-                                                placeholder="-----BEGIN RSA PRIVATE KEY----- (opsional: paste Private Key Prod/PTR di sini jika belum ada di .env)"
-                                                spellCheck={false}
-                                                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-1.5 font-mono text-[11px] text-slate-100 outline-none focus:border-amber-400"
-                                            />
-                                        </div>
+                                    <div className="rounded-2xl border border-amber-500/30 bg-slate-950/70 p-3.5 text-xs text-amber-100/90">
+                                        <p className="font-semibold text-amber-200">
+                                            Ketentuan PTR (PROD_AGENT.md):
+                                        </p>
+                                        <ul className="mt-1.5 list-disc space-y-1 pl-4 text-[11px] leading-relaxed">
+                                            <li>
+                                                MID/TID PTR (<code>71028859200</code> / <code>86847056</code>) hanya untuk pengujian di environment production, <strong>bukan</strong> untuk transaksi real end-user sebelum Go Live.
+                                            </li>
+                                            <li>
+                                                Untuk amount pengujian boleh nominal kecil: <strong>Rp 1.00 – Rp 5.00</strong> (default preset di mode PTR sudah diset ke <code>1.00</code>).
+                                            </li>
+                                            <li>
+                                                Callback notify production menggunakan endpoint terbaru:{" "}
+                                                <code className="text-emerald-300">POST /memento/pay/yokke/v2/notify</code>.
+                                            </li>
+                                        </ul>
                                     </div>
                                 </div>
                             ) : null}

@@ -1,4 +1,4 @@
-import { createSign, createHmac, createHash, createPublicKey, randomUUID } from "crypto";
+import { createSign, createHmac, createHash, randomUUID } from "crypto";
 import { env } from "@/app/env";
 import { db } from "@/utils/supabase/server";
 
@@ -31,20 +31,6 @@ type ResolvedCredentials = {
     merchantName: string;
 };
 
-let runtimeProdPrivateKey = "";
-
-export function setRuntimeProdPrivateKey(pem: string) {
-    const trimmed = pem.trim();
-    if (trimmed && trimmed !== runtimeProdPrivateKey) {
-        runtimeProdPrivateKey = trimmed;
-        delete cachedTokens.prod;
-    }
-}
-
-export function getRuntimeProdPrivateKey(): string {
-    return runtimeProdPrivateKey;
-}
-
 export function normalizePem(raw: string, type: "PRIVATE KEY" | "RSA PRIVATE KEY" | "PUBLIC KEY" = "RSA PRIVATE KEY"): string {
     const trimmed = raw.trim().replace(/\\n/g, "\n");
     if (!trimmed) return "";
@@ -54,59 +40,11 @@ export function normalizePem(raw: string, type: "PRIVATE KEY" | "RSA PRIVATE KEY
     return `-----BEGIN ${type}-----\n${lines}\n-----END ${type}-----`;
 }
 
-export function stripPemHeaders(pem: string): string {
-    return pem
-        .replace(/-----BEGIN [^-]+-----/g, "")
-        .replace(/-----END [^-]+-----/g, "")
-        .replace(/\s+/g, "");
-}
-
-export function verifyKeyPair(privateKeyPem: string, expectedPublicKeyPem: string): {
-    hasPrivateKey: boolean;
-    validPrivateKey: boolean;
-    matchesPublicKey: boolean;
-    derivedPublicKey?: string;
-    error?: string;
-} {
-    if (!privateKeyPem || !privateKeyPem.trim()) {
-        return { hasPrivateKey: false, validPrivateKey: false, matchesPublicKey: false };
-    }
-    try {
-        const normalizedPriv = normalizePem(privateKeyPem, "RSA PRIVATE KEY");
-        const pubObj = createPublicKey(normalizedPriv);
-        const spkiPem = pubObj.export({ type: "spki", format: "pem" }).toString();
-        const derivedB64 = stripPemHeaders(spkiPem);
-        const expectedB64 = stripPemHeaders(expectedPublicKeyPem);
-        return {
-            hasPrivateKey: true,
-            validPrivateKey: true,
-            matchesPublicKey: Boolean(expectedB64 && derivedB64 === expectedB64),
-            derivedPublicKey: derivedB64,
-        };
-    } catch (err) {
-        return {
-            hasPrivateKey: true,
-            validPrivateKey: false,
-            matchesPublicKey: false,
-            error: err instanceof Error ? err.message : String(err),
-        };
-    }
-}
-
 export function resolveYokkeCredentials(
     mode: YokkeEnvMode = env.yokkeIsProduction ? "prod" : "sandbox",
-    privateKeyOverride?: string,
 ): ResolvedCredentials {
     if (mode === "prod") {
-        if (privateKeyOverride?.trim()) {
-            setRuntimeProdPrivateKey(privateKeyOverride);
-        }
-        const rawPriv =
-            privateKeyOverride?.trim() ||
-            runtimeProdPrivateKey ||
-            env.yokkeProdPrivateKey ||
-            env.yokkePrivateKey ||
-            "";
+        const rawPriv = env.yokkeProdPrivateKey || env.yokkePrivateKey || "";
         return {
             mode: "prod",
             isProduction: true,
@@ -131,7 +69,7 @@ export function resolveYokkeCredentials(
         callbackPath: SANDBOX_CALLBACK_PATH,
         clientKey: env.yokkeClientKey || "",
         clientSecret: env.yokkeClientSecret || "",
-        privateKey: normalizePem(privateKeyOverride?.trim() || env.yokkePrivateKey || "", "RSA PRIVATE KEY"),
+        privateKey: normalizePem(env.yokkePrivateKey || "", "RSA PRIVATE KEY"),
         publicKey: "",
         partnerId: env.yokkePartnerId || "MEMENTOMPMSNAP",
         channelId: env.yokkeChannelId || "02",
@@ -208,22 +146,20 @@ function buildApiSignature(
 }
 
 const TOKEN_TTL_MS = 50 * 60 * 1000;
-const cachedTokens: Partial<Record<YokkeEnvMode, { token: string; expiresAt: number; keyFinger: string }>> = {};
+const cachedTokens: Partial<Record<YokkeEnvMode, { token: string; expiresAt: number }>> = {};
 
 export async function getAccessToken(
     mode: YokkeEnvMode = env.yokkeIsProduction ? "prod" : "sandbox",
-    privateKeyOverride?: string,
 ): Promise<{
     token: string;
     request: YokkeRequestSnapshot;
     response: unknown;
     httpStatus: number;
 }> {
-    const creds = resolveYokkeCredentials(mode, privateKeyOverride);
-    const keyFinger = creds.privateKey.slice(-32);
+    const creds = resolveYokkeCredentials(mode);
     const cached = cachedTokens[mode];
 
-    if (cached && Date.now() < cached.expiresAt && cached.keyFinger === keyFinger) {
+    if (cached && Date.now() < cached.expiresAt) {
         return {
             token: cached.token,
             request: {
@@ -261,7 +197,6 @@ export async function getAccessToken(
         cachedTokens[mode] = {
             token: response.accessToken as string,
             expiresAt: Date.now() + TOKEN_TTL_MS,
-            keyFinger,
         };
     }
 
@@ -283,7 +218,6 @@ export type YokkeRequestSnapshot = {
 
 export type YokkeCallOptions = {
     mode?: YokkeEnvMode;
-    privateKeyOverride?: string;
     invalidToken?: boolean;
     invalidSignature?: boolean;
     omitChannelId?: boolean;
@@ -318,10 +252,10 @@ export async function callYokkeApi(
     options: YokkeCallOptions = {},
 ): Promise<YokkeCallResult> {
     const mode: YokkeEnvMode = options.mode ?? (env.yokkeIsProduction ? "prod" : "sandbox");
-    const creds = resolveYokkeCredentials(mode, options.privateKeyOverride);
+    const creds = resolveYokkeCredentials(mode);
 
     if (!creds.clientKey || !creds.privateKey || !creds.clientSecret || !creds.partnerId) {
-        throw new Error(`Missing required Yokke ${mode.toUpperCase()} credentials (check Private Key / .env)`);
+        throw new Error(`Missing required Yokke ${mode.toUpperCase()} environment variables`);
     }
 
     let accessToken = "";
@@ -329,7 +263,7 @@ export async function callYokkeApi(
     if (options.invalidToken) {
         accessToken = "INVALID_ACCESS_TOKEN_FOR_TESTING";
     } else {
-        const tokenResult = await getAccessToken(mode, options.privateKeyOverride);
+        const tokenResult = await getAccessToken(mode);
         tokenExchange = {
             request: tokenResult.request,
             response: tokenResult.response,
@@ -457,20 +391,8 @@ async function storePendingPayment(
     }
 }
 
-export function getEnvConfig(mode: YokkeEnvMode, privateKeyOverride?: string) {
-    const creds = resolveYokkeCredentials(mode, privateKeyOverride);
-    const keyCheck =
-        mode === "prod"
-            ? verifyKeyPair(
-                  privateKeyOverride?.trim() || runtimeProdPrivateKey || env.yokkeProdPrivateKey || "",
-                  creds.publicKey,
-              )
-            : { hasPrivateKey: Boolean(creds.privateKey), validPrivateKey: Boolean(creds.privateKey), matchesPublicKey: true };
-
-    const fallbackCheck =
-        mode === "prod" && !keyCheck.hasPrivateKey && creds.privateKey
-            ? verifyKeyPair(creds.privateKey, creds.publicKey)
-            : keyCheck;
+export function getEnvConfig(mode: YokkeEnvMode) {
+    const creds = resolveYokkeCredentials(mode);
 
     return {
         mode,
@@ -482,13 +404,10 @@ export function getEnvConfig(mode: YokkeEnvMode, privateKeyOverride?: string) {
         channelId: creds.channelId,
         clientKey: creds.clientKey,
         clientSecretPreview: creds.clientSecret ? `${creds.clientSecret.slice(0, 8)}...${creds.clientSecret.slice(-4)}` : "",
-        publicKeyBase64: stripPemHeaders(creds.publicKey),
         baseUrl: creds.baseUrl,
         callbackPath: creds.callbackPath,
         isProduction: creds.isProduction,
         defaultAmount: creds.isProduction ? "1.00" : "10000.00",
-        hasDedicatedProdPrivateKey: mode === "prod" ? Boolean(runtimeProdPrivateKey || env.yokkeProdPrivateKey) : true,
-        privateKeyMatchesPublicKey: fallbackCheck.matchesPublicKey,
         configured: Boolean(
             creds.clientKey &&
                 creds.privateKey &&

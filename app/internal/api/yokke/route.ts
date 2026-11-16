@@ -61,13 +61,13 @@ export async function POST(request: Request) {
               ? "sandbox"
               : getAllEnvDefaults().defaultMode;
 
-    const defaults = getEnvConfig(mode, payload.options?.privateKeyOverride);
+    const defaults = getEnvConfig(mode);
 
     if (!defaults.configured) {
         return NextResponse.json(
             {
                 success: false,
-                error: `Yokke ${mode.toUpperCase()} credentials are not fully configured (missing Private Key or env vars)`,
+                error: `Yokke ${mode.toUpperCase()} credentials are not configured in environment variables`,
             },
             { status: 500 },
         );
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
             success: true,
             action,
             path,
-            envConfig: getEnvConfig(mode, options.privateKeyOverride),
+            envConfig: defaults,
             ...result,
         });
     } catch (error) {
