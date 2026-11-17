@@ -160,6 +160,7 @@ export async function getAccessToken(
     const cached = cachedTokens[mode];
 
     if (cached && Date.now() < cached.expiresAt) {
+        console.log(`[yokke/internal] Using cached ${mode} access token (expires in ${Math.round((cached.expiresAt - Date.now()) / 1000)}s)`);
         return {
             token: cached.token,
             request: {
@@ -186,12 +187,16 @@ export async function getAccessToken(
     };
     const body = { grantType: "client_credentials" };
 
+    console.log(`[yokke/internal] Token Request (${mode}):`, JSON.stringify({ url, headers, body }));
+
     const res = await fetch(url, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
     });
     const response = await res.json().catch(() => ({}));
+
+    console.log(`[yokke/internal] Token Response (${mode}) [HTTP ${res.status}]:`, JSON.stringify(response));
 
     if (res.ok && response.accessToken) {
         cachedTokens[mode] = {
@@ -310,6 +315,10 @@ export async function callYokkeApi(
     const url = `${creds.baseUrl}${path}`;
     const request: YokkeRequestSnapshot = { method: "POST", url, path, headers, body };
 
+    console.log(`[yokke/internal] Request (${mode}) -> Post' URL ${url}`);
+    console.log(`[yokke/internal] RequestHeader (${mode}):`, JSON.stringify(headers));
+    console.log(`[yokke/internal] RequestBody (${mode}):`, JSON.stringify(body));
+
     let httpStatus = 0;
     let response: Record<string, unknown> = {};
 
@@ -329,6 +338,11 @@ export async function callYokkeApi(
     } catch (err) {
         response = { error: err instanceof Error ? err.message : String(err) };
     }
+
+    console.log(`[yokke/internal] ResponseBody (${mode}) [HTTP ${httpStatus}]:`, JSON.stringify(response));
+    console.log(
+        `[yokke/internal] WAG Log (${mode}):\nPost' URL ${url}\nRequestHeader:\n${JSON.stringify(headers, null, 2)}\n\nRequestBody:\n${JSON.stringify(body, null, 2)}\n\nResponseBody:\n${JSON.stringify(response, null, 2)}`,
+    );
 
     const result: YokkeCallResult = {
         mode,
@@ -384,10 +398,18 @@ async function storePendingPayment(
             uuid,
         });
         if (error) {
-            console.warn("[internal/yokke] pending payment insert skipped:", error.message);
+            console.warn("[yokke/internal] pending payment insert skipped:", error.message);
+        } else {
+            console.log("[yokke/internal] stored pending payment:", JSON.stringify({
+                partnerReferenceNo,
+                yokkeReferenceNo,
+                externalId,
+                boothId,
+                uuid,
+            }));
         }
     } catch (err) {
-        console.warn("[internal/yokke] pending payment insert failed:", err);
+        console.warn("[yokke/internal] pending payment insert failed:", err);
     }
 }
 

@@ -80,28 +80,36 @@ async function inquireTransaction(
     };
 
     const signature = buildApiSignature("POST", INQUIRY_PATH, accessToken, body, timestamp, creds.clientSecret);
+    const inquiryUrl = getInquiryUrl(mode);
+    const inquiryHeaders = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        "X-TIMESTAMP": timestamp,
+        "X-SIGNATURE": signature,
+        "X-EXTERNAL-ID": externalId,
+        "X-PARTNER-ID": creds.partnerId,
+        "CHANNEL-ID": creds.channelId ?? "02",
+    };
 
-    const res = await fetch(getInquiryUrl(mode), {
+    console.log(`[yokke/notify] Inquiry Request (${mode}) -> Post' URL ${inquiryUrl}`);
+    console.log(`[yokke/notify] Inquiry RequestHeader (${mode}):`, JSON.stringify(inquiryHeaders));
+    console.log(`[yokke/notify] Inquiry RequestBody (${mode}):`, JSON.stringify(body));
+
+    const res = await fetch(inquiryUrl, {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${accessToken}`,
-            "X-TIMESTAMP": timestamp,
-            "X-SIGNATURE": signature,
-            "X-EXTERNAL-ID": externalId,
-            "X-PARTNER-ID": creds.partnerId,
-            "CHANNEL-ID": creds.channelId ?? "02",
-        },
+        headers: inquiryHeaders,
         body: JSON.stringify(body),
     });
 
+    const inquiryData = await res.json().catch(() => ({}));
+    console.log(`[yokke/notify] Inquiry ResponseBody (${mode}) [HTTP ${res.status}]:`, JSON.stringify(inquiryData));
+
     if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error("[yokke] inquiry error:", err);
-        throw new Error(err.responseMessage ?? "Inquiry failed");
+        console.error("[yokke/notify] inquiry error:", inquiryData);
+        throw new Error((inquiryData as { responseMessage?: string }).responseMessage ?? "Inquiry failed");
     }
 
-    return res.json() as Promise<YokkeInquiryResponse>;
+    return inquiryData as YokkeInquiryResponse;
 }
 
 // ─── Access token (re-used from generate route logic) ────────────────────────
@@ -250,21 +258,30 @@ function successResponse() {
  * persist the payment.
  */
 export async function POST(request: Request) {
+    const incomingHeaders = Object.fromEntries(request.headers.entries());
     let body: YokkeNotifyPayload;
 
     try {
         body = await request.json();
     } catch {
-        return NextResponse.json({ responseCode: "4005200", responseMessage: "Bad Request" }, { status: 400 });
+        const badRes = { responseCode: "4005200", responseMessage: "Bad Request" };
+        console.error("[yokke/notify] Invalid JSON body. Headers:", JSON.stringify(incomingHeaders), "Response:", JSON.stringify(badRes));
+        return NextResponse.json(badRes, { status: 400 });
     }
 
-    console.log("[yokke] notify received:", JSON.stringify(body));
+    const okResPayload = { responseCode: "2005200", responseMessage: "Successful" };
+    console.log(`[yokke/notify] Post' URL ${request.url}`);
+    console.log("[yokke/notify] RequestHeader:", JSON.stringify(incomingHeaders));
+    console.log("[yokke/notify] RequestBody:", JSON.stringify(body));
 
     const { originalReferenceNo, latestTransactionStatus, amount } = body;
 
     // Only process successful payments
     if (latestTransactionStatus !== "00") {
-        console.log("[yokke] ignoring non-success status:", latestTransactionStatus);
+        console.log("[yokke/notify] ignoring non-success status:", latestTransactionStatus, "ResponseBody:", JSON.stringify(okResPayload));
+        console.log(
+            `[yokke/notify] WAG Log:\nPost' URL ${request.url}\nRequestHeader:\n${JSON.stringify(incomingHeaders, null, 2)}\n\nRequestBody:\n${JSON.stringify(body, null, 2)}\n\nResponseBody:\n${JSON.stringify(okResPayload, null, 2)}`,
+        );
         return successResponse(); // still respond 200 so Yokke won't retry
     }
 
@@ -331,13 +348,23 @@ export async function POST(request: Request) {
         // 4. Check & send notice-print email if threshold reached
         await checkAndSendNoticePrint(boothId);
 
+        console.log("[yokke/notify] ResponseBody [HTTP 200]:", JSON.stringify(okResPayload));
+        console.log(
+            `[yokke/notify] WAG Log:\nPost' URL ${request.url}\nRequestHeader:\n${JSON.stringify(incomingHeaders, null, 2)}\n\nRequestBody:\n${JSON.stringify(body, null, 2)}\n\nResponseBody:\n${JSON.stringify(okResPayload, null, 2)}`,
+        );
+
         return successResponse();
     } catch (e) {
-        console.error("[yokke] notify processing error:", e);
+        const errPayload = { responseCode: "5005200", responseMessage: "Internal Server Error" };
+        console.error("[yokke/notify] processing error:", e);
+        console.error("[yokke/notify] ResponseBody [HTTP 500]:", JSON.stringify(errPayload));
+        console.log(
+            `[yokke/notify] WAG Log (Error):\nPost' URL ${request.url}\nRequestHeader:\n${JSON.stringify(incomingHeaders, null, 2)}\n\nRequestBody:\n${JSON.stringify(body, null, 2)}\n\nResponseBody:\n${JSON.stringify(errPayload, null, 2)}`,
+        );
         // Still return 200 with success code so Yokke doesn't retry for our own DB errors
         // but use a different internal log.  Adjust per Yokke's retry policy if needed.
         return NextResponse.json(
-            { responseCode: "5005200", responseMessage: "Internal Server Error" },
+            errPayload,
             { status: 500 },
         );
     }

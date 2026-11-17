@@ -76,12 +76,16 @@ export async function POST(request: Request) {
     const body = payload.body ?? {};
     const options = payload.options ?? {};
 
+    console.log(`[yokke/internal/api] POST action=${action} mode=${mode} path=${path} options=${JSON.stringify(options)}`);
+
     try {
         const result = await callYokkeApi(path, body, {
             ...options,
             mode,
             storePending: action === "generate" ? options.storePending !== false : false,
         });
+
+        console.log(`[yokke/internal/api] Completed action=${action} mode=${mode} status=${result.httpStatus} responseCode=${result.response?.responseCode ?? "-"}`);
 
         return NextResponse.json({
             success: true,
@@ -91,6 +95,7 @@ export async function POST(request: Request) {
             ...result,
         });
     } catch (error) {
+        console.error(`[yokke/internal/api] Error action=${action} mode=${mode}:`, error);
         return NextResponse.json(
             { success: false, error: error instanceof Error ? error.message : String(error) },
             { status: 500 },
