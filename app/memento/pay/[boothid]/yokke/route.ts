@@ -2,6 +2,7 @@ import { db } from "@/utils/supabase/server";
 import { createSign, createHmac, createHash, randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { env } from "@/app/env";
+import { yokkeHttpsPost } from "@/app/internal/lib/yokke";
 
 // ─── URL helpers ──────────────────────────────────────────────────────────────
 
@@ -75,7 +76,9 @@ async function getAccessToken(): Promise<string> {
     const signature = buildTokenSignature(clientKey, timestamp);
     const url = getTokenUrl();
 
+    const u = new URL(url);
     const headers = {
+        "Host": u.host,
         "Content-Type": "application/json",
         "X-CLIENT-KEY": clientKey || "",
         "X-TIMESTAMP": timestamp,
@@ -87,28 +90,27 @@ async function getAccessToken(): Promise<string> {
     console.log("[yokke] Requesting access token from URL:", url);
     let res;
     try {
-        res = await fetch(url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ grantType: "client_credentials" }),
-        });
+        res = await yokkeHttpsPost(url, headers, { grantType: "client_credentials" });
     } catch (fetchErr) {
         console.error("[yokke] Access token fetch request failed (network error):", fetchErr);
         throw fetchErr;
     }
 
-    if (!res.ok) {
-        const resText = await res.text().catch(() => "");
+    if (res.status < 200 || res.status >= 300) {
+        const resText = res.text;
         let errJson: Record<string, unknown> = {};
         try {
             errJson = JSON.parse(resText);
         } catch {}
-        console.error(`[yokke] Access token error: HTTP status ${res.status} (${res.statusText}). Response:`, errJson || resText);
+        console.error(`[yokke] Access token error: HTTP status ${res.status}. Response:`, errJson || resText);
         throw new Error(`Failed to get Yokke access token (HTTP ${res.status})`);
     }
 
-    const data = await res.json().catch(() => ({}));
-    if (!data.accessToken) {
+    let data: Record<string, unknown> = {};
+    try {
+        data = JSON.parse(res.text);
+    } catch {}
+    if (!data.accessToken || typeof data.accessToken !== "string") {
         console.error("[yokke] Access token response did not contain accessToken:", data);
         throw new Error("Access token missing in Yokke response");
     }
@@ -383,37 +385,40 @@ async function generateQR(
         body,
     });
 
+    const u = new URL(url);
+    const reqHeaders = {
+        "Host": u.host,
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${accessToken}`,
+        "X-TIMESTAMP": timestamp,
+        "X-SIGNATURE": signature,
+        "X-EXTERNAL-ID": externalId,
+        "X-PARTNER-ID": env.yokkePartnerId,
+        "CHANNEL-ID": env.yokkeChannelId ?? "02",
+    };
+
     let res;
     try {
-        res = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${accessToken}`,
-                "X-TIMESTAMP": timestamp,
-                "X-SIGNATURE": signature,
-                "X-EXTERNAL-ID": externalId,
-                "X-PARTNER-ID": env.yokkePartnerId,
-                "CHANNEL-ID": env.yokkeChannelId ?? "02",
-            },
-            body: JSON.stringify(body),
-        });
+        res = await yokkeHttpsPost(url, reqHeaders, body);
     } catch (fetchErr) {
         console.error("[yokke] QR generate fetch request failed (network error):", fetchErr);
         throw fetchErr;
     }
 
-    if (!res.ok) {
-        const resText = await res.text().catch(() => "");
+    if (res.status < 200 || res.status >= 300) {
+        const resText = res.text;
         let errJson: { responseMessage?: string } = {};
         try {
             errJson = JSON.parse(resText);
         } catch {}
-        console.error(`[yokke] QR generate error: HTTP status ${res.status} (${res.statusText}). Response:`, errJson || resText);
+        console.error(`[yokke] QR generate error: HTTP status ${res.status}. Response:`, errJson || resText);
         throw new Error(errJson.responseMessage ?? `Failed to generate Yokke QR (HTTP ${res.status})`);
     }
 
-    const data: YokkeQRResponse = await res.json().catch(() => ({}));
+    let data: YokkeQRResponse = { responseCode: "", responseMessage: "", partnerReferenceNo: partnerRef };
+    try {
+        data = JSON.parse(res.text);
+    } catch {}
     console.log("[yokke] QR API response received successfully:", data);
 
     if (!data.qrContent) {

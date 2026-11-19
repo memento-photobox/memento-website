@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { env } from "@/app/env";
 import { Memento } from "../../../types";
 import { checkAndSendNoticePrint } from "../../notice-check";
-import { resolveYokkeCredentials, type YokkeEnvMode } from "@/app/internal/lib/yokke";
+import { resolveYokkeCredentials, yokkeHttpsPost, type YokkeEnvMode } from "@/app/internal/lib/yokke";
 
 
 const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
@@ -81,7 +81,9 @@ async function inquireTransaction(
 
     const signature = buildApiSignature("POST", INQUIRY_PATH, accessToken, body, timestamp, creds.clientSecret);
     const inquiryUrl = getInquiryUrl(mode);
+    const u = new URL(inquiryUrl);
     const inquiryHeaders = {
+        "Host": u.host,
         "Content-Type": "application/json",
         "Authorization": `Bearer ${accessToken}`,
         "X-TIMESTAMP": timestamp,
@@ -95,21 +97,21 @@ async function inquireTransaction(
     console.log(`[yokke/notify] Inquiry RequestHeader (${mode}):`, JSON.stringify(inquiryHeaders));
     console.log(`[yokke/notify] Inquiry RequestBody (${mode}):`, JSON.stringify(body));
 
-    const res = await fetch(inquiryUrl, {
-        method: "POST",
-        headers: inquiryHeaders,
-        body: JSON.stringify(body),
-    });
-
-    const inquiryData = await res.json().catch(() => ({}));
+    const res = await yokkeHttpsPost(inquiryUrl, inquiryHeaders, body);
+    let inquiryData: Record<string, unknown> = {};
+    try {
+        inquiryData = JSON.parse(res.text);
+    } catch {
+        inquiryData = { rawText: res.text };
+    }
     console.log(`[yokke/notify] Inquiry ResponseBody (${mode}) [HTTP ${res.status}]:`, JSON.stringify(inquiryData));
 
-    if (!res.ok) {
+    if (res.status < 200 || res.status >= 300) {
         console.error("[yokke/notify] inquiry error:", inquiryData);
         throw new Error((inquiryData as { responseMessage?: string }).responseMessage ?? "Inquiry failed");
     }
 
-    return inquiryData as YokkeInquiryResponse;
+    return inquiryData as unknown as YokkeInquiryResponse;
 }
 
 // ─── Access token (re-used from generate route logic) ────────────────────────
@@ -140,7 +142,10 @@ async function getAccessToken(mode: YokkeEnvMode): Promise<string> {
     const timestamp = getTimestamp();
     const signature = buildTokenSignature(clientKey, timestamp, creds.privateKey);
 
+    const tokenUrl = mode === "prod" ? PROD_TOKEN_URL : SANDBOX_TOKEN_URL;
+    const u = new URL(tokenUrl);
     const headers = {
+        "Host": u.host,
         "Content-Type": "application/json",
         "X-CLIENT-KEY": clientKey,
         "X-TIMESTAMP": timestamp,
@@ -149,17 +154,11 @@ async function getAccessToken(mode: YokkeEnvMode): Promise<string> {
     };
     console.log(`[yokke] Access token request headers (notify/${mode}):`, headers);
 
-    const res = await fetch(
-        mode === "prod" ? PROD_TOKEN_URL : SANDBOX_TOKEN_URL,
-        {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ grantType: "client_credentials" }),
-        },
-    );
-
-    if (!res.ok) throw new Error(`Failed to get Yokke ${mode} access token for inquiry`);
-    const data = await res.json();
+    const res = await yokkeHttpsPost(tokenUrl, headers, { grantType: "client_credentials" });
+    if (res.status < 200 || res.status >= 300) {
+        throw new Error(`Failed to get Yokke ${mode} access token for inquiry (HTTP ${res.status})`);
+    }
+    const data = JSON.parse(res.text);
 
     // Cache the token
     cachedTokens[mode] = { token: data.accessToken as string, expiresAt: Date.now() + TOKEN_TTL_MS };

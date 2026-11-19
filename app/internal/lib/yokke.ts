@@ -1,6 +1,52 @@
 import { createSign, createHmac, createHash, randomUUID } from "crypto";
+import https from "https";
 import { env } from "@/app/env";
 import { db } from "@/utils/supabase/server";
+
+/**
+ * Node's built-in fetch() (Undici) forces the HTTP/1.1 Host header to lowercase ("host")
+ * and ignores any user-supplied "Host" header. Yokke Production's API gateway performs a
+ * case-sensitive lookup for "Host" (capital H), returning 4010101 if "host" is lowercase.
+ * Using node:https preserves the exact "Host" header casing on the wire.
+ */
+export function yokkeHttpsPost(
+    urlStr: string,
+    headers: Record<string, string>,
+    bodyObj: unknown,
+): Promise<{ status: number; text: string }> {
+    return new Promise((resolve, reject) => {
+        const u = new URL(urlStr);
+        const bodyStr = typeof bodyObj === "string" ? bodyObj : JSON.stringify(bodyObj);
+        const finalHeaders: Record<string, string> = {
+            Host: u.host,
+            ...headers,
+            "Content-Length": Buffer.byteLength(bodyStr).toString(),
+        };
+
+        const req = https.request(
+            {
+                hostname: u.hostname,
+                port: u.port || 443,
+                path: u.pathname + u.search,
+                method: "POST",
+                headers: finalHeaders,
+            },
+            (res) => {
+                let data = "";
+                res.setEncoding("utf8");
+                res.on("data", (chunk) => {
+                    data += chunk;
+                });
+                res.on("end", () => {
+                    resolve({ status: res.statusCode ?? 0, text: data });
+                });
+            },
+        );
+        req.on("error", reject);
+        req.write(bodyStr);
+        req.end();
+    });
+}
 
 export const SANDBOX_BASE = "https://tst.yokke.co.id:7778";
 export const PROD_BASE = "https://api.yokke.co.id:7778";
@@ -178,7 +224,9 @@ export async function getAccessToken(
     const timestamp = getTimestamp();
     const signature = buildTokenSignature(creds.clientKey, timestamp, creds.privateKey);
     const url = `${creds.baseUrl}${TOKEN_PATH}`;
+    const u = new URL(url);
     const headers = {
+        Host: u.host,
         "Content-Type": "application/json",
         "X-CLIENT-KEY": creds.clientKey,
         "X-TIMESTAMP": timestamp,
@@ -189,16 +237,17 @@ export async function getAccessToken(
 
     console.log(`[yokke/internal] Token Request (${mode}):`, JSON.stringify({ url, headers, body }));
 
-    const res = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-    });
-    const response = await res.json().catch(() => ({}));
+    const res = await yokkeHttpsPost(url, headers, body);
+    let response: Record<string, unknown> = {};
+    try {
+        response = JSON.parse(res.text) as Record<string, unknown>;
+    } catch {
+        response = { rawText: res.text };
+    }
 
     console.log(`[yokke/internal] Token Response (${mode}) [HTTP ${res.status}]:`, JSON.stringify(response));
 
-    if (res.ok && response.accessToken) {
+    if (res.status >= 200 && res.status < 300 && response.accessToken) {
         cachedTokens[mode] = {
             token: response.accessToken as string,
             expiresAt: Date.now() + TOKEN_TTL_MS,
@@ -299,7 +348,10 @@ export async function callYokkeApi(
         signature = buildApiSignature("POST", path, accessToken, body, timestamp, creds.clientSecret);
     }
 
+    const url = `${creds.baseUrl}${path}`;
+    const u = new URL(url);
     const headers: Record<string, string> = {
+        Host: u.host,
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
         "X-TIMESTAMP": timestamp,
@@ -312,7 +364,6 @@ export async function callYokkeApi(
         headers["CHANNEL-ID"] = channelId;
     }
 
-    const url = `${creds.baseUrl}${path}`;
     const request: YokkeRequestSnapshot = { method: "POST", url, path, headers, body };
 
     console.log(`[yokke/internal] Request (${mode}) -> Post' URL ${url}`);
@@ -323,17 +374,12 @@ export async function callYokkeApi(
     let response: Record<string, unknown> = {};
 
     try {
-        const res = await fetch(url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(body),
-        });
+        const res = await yokkeHttpsPost(url, headers, body);
         httpStatus = res.status;
-        const text = await res.text();
         try {
-            response = JSON.parse(text) as Record<string, unknown>;
+            response = JSON.parse(res.text) as Record<string, unknown>;
         } catch {
-            response = { rawText: text };
+            response = { rawText: res.text };
         }
     } catch (err) {
         response = { error: err instanceof Error ? err.message : String(err) };
